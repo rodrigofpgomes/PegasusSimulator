@@ -200,44 +200,52 @@ class MultirotorBatch(VehicleBatch):
         if self._sim_running == False:
             return
 
+        # Call the update methods in all backends
+        for backend in self._backends:
+            backend._vehicle = self
+            backend.update(dt)
+        
         # TODO:  Generate the rotating propeller visual effect
         # self.handle_propeller_visual(i, forces_z[i], articulation)
 
         # Get the articulation root of the vehicle -> rotating propeller visual effect
         # articulation = ...
 
-        # Get the desired angular velocities for each rotor from the first backend (can be mavlink or other) expressed in rad/s
-        if len(self._backends) != 0:
+        input_type = self._backends[0].input_mode()
+
+        if input_type == "rotor_velocity":
+            
             desired_rotor_velocities = self._backends[0].input_reference()
-        else:
-            desired_rotor_velocities = torch.zeros((self.n_vehicles, self._thrusters._num_rotors), dtype=torch.float32, device=self.device)
 
-        # Input the desired rotor velocities in the thruster model
-        self._thrusters.set_input_reference(desired_rotor_velocities)
+            # Input the desired rotor velocities in the thruster model
+            self._thrusters.set_input_reference(desired_rotor_velocities)
 
-        forces = torch.zeros((self.n_vehicles, self.parts_per_vehicle, 3), dtype=torch.float32, device=self.device)
-        torques = torch.zeros((self.n_vehicles, self.parts_per_vehicle, 3), dtype=torch.float32, device=self.device)
+            forces = torch.zeros((self.n_vehicles, self.parts_per_vehicle, 3), dtype=torch.float32, device=self.device)
+            torques = torch.zeros((self.n_vehicles, self.parts_per_vehicle, 3), dtype=torch.float32, device=self.device)
 
-        # Get the desired forces to apply to the rotors vehicles and the desired rolling_moment
-        forces_z, _, rolling_moment = self._thrusters.update(self._state, dt)
+            # Get the desired forces to apply to the rotors vehicles and the desired rolling_moment
+            forces_z, _, rolling_moment = self._thrusters.update(self._state, dt)
 
-        # Apply the force in Z to each rotor in the rotor frame
-        # Apply the torque to the body frame of the vehicle that corresponds to the rolling moment
-        forces[:, 1:, 2] = forces_z
-        torques[:, 0, 2] = rolling_moment
+            # Apply the force in Z to each rotor in the rotor frame
+            # Apply the torque to the body frame of the vehicle that corresponds to the rolling moment
+            forces[:, 1:, 2] = forces_z
+            torques[:, 0, 2] = rolling_moment
 
-        # Compute the total linear drag force to apply to the vehicle's body frame
-        drag = self._drag.update(self._state, dt)
+            # Compute the total linear drag force to apply to the vehicle's body frame
+            drag = self._drag.update(self._state, dt)
 
-        forces[:, 0, :] += drag
+            forces[:, 0, :] += drag
+
+        if input_type == "direct_force":
+
+            input_ref = self._backends[0].input_reference()
+            
+            forces = input_ref[:, 0]
+            
+            torques = input_ref[:, 1]
 
         # Apply the forces and torques to the vehicle in the simulator
         self.apply_forces_and_torques_all_parts(forces, torques)
-
-        # Call the update methods in all backends
-        for backend in self._backends:
-            backend._vehicle = self
-            backend.update(dt)
 
 
     def force_and_torques_to_velocities(self, force: torch.Tensor, torque: torch.Tensor):

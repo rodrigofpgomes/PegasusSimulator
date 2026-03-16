@@ -97,13 +97,13 @@ class VehicleBatch():
         # Variable that will hold the current state of the vehicle
         self._state = StateBatch(self.n_vehicles, self.device)
 
-        # Add a callback to the physics engine to update the current state of the system
-        self._world.add_physics_callback(self._stage_prefix + "/state", self.update_state)
-
         # Add the update method to the physics callback if the world was received
         # so that we can apply forces and torques to the vehicle. Note, this method should 
         # be implemented in classes that inherit the vehicle object
         self._world.add_physics_callback(self._stage_prefix + "/update", self.update)
+
+        # Add a callback to the physics engine to update the current state of the system
+        self._world.add_physics_callback(self._stage_prefix + "/state", self.update_state)
 
         # Set the flag that signals if the simulation is running or not
         self._sim_running = False
@@ -157,8 +157,6 @@ class VehicleBatch():
         for backend in self._backends:
             backend.initialize(self)
 
-        # Add a callbacks for the
-        self._world.add_physics_callback(self._stage_prefix + "/mav_state", self.update_sim_state)
 
 
     def initialize(self):
@@ -440,6 +438,10 @@ class VehicleBatch():
         # The acceleration of the vehicle expressed in the inertial frame X_ddot = [x_ddot, y_ddot, z_ddot]
         self._state.linear_acceleration = linear_acceleration
 
+        for backend in self._backends:
+            backend._vehicle = self
+            backend.update_state(self._state)
+
 
     def start(self):
         """
@@ -504,15 +506,3 @@ class VehicleBatch():
                 for backend in self._backends:
                     backend._vehicle = self
                     backend.update_graphical_sensor(sensor.sensor_type, sensor_data)
-
-    def update_sim_state(self, dt: float):
-        """
-        Callback that is used to "send" the current state for each backend being used to control the vehicle. This callback
-        is called on every physics step.
-
-        Args:
-            dt (float): The time elapsed between the previous and current function calls (s).
-        """
-        for backend in self._backends:
-            backend._vehicle = self
-            backend.update_state(self._state)
