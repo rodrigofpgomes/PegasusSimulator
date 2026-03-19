@@ -29,8 +29,6 @@ from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.transforms import quaternion_apply, quaternion_invert
 
 
-from isaacsim.core.simulation_manager import SimulationManager, IsaacEvents
-
 
 class VehicleBatch():
     """
@@ -99,18 +97,13 @@ class VehicleBatch():
         # Variable that will hold the current state of the vehicle
         self._state = StateBatch(self.n_vehicles, self.device)
 
-        self.sim_time_pre = 0
-        self.sim_time_pos = 0
-
         # Add the update method to the physics callback if the world was received
         # so that we can apply forces and torques to the vehicle. Note, this method should 
         # be implemented in classes that inherit the vehicle object
-        #self._world.add_physics_callback(self._stage_prefix + "/update", self.update)
-        self._cb_pre = SimulationManager.register_callback(self.update, event=IsaacEvents.PRE_PHYSICS_STEP, order=0)
+        self._world.add_physics_callback(self._stage_prefix + "/update", self.update)
 
         # Add a callback to the physics engine to update the current state of the system
-        #self._world.add_physics_callback(self._stage_prefix + "/state", self.update_state)
-        self._cb_post = SimulationManager.register_callback(self.update_state, event=IsaacEvents.POST_PHYSICS_STEP, order=0)
+        self._world.add_physics_callback(self._stage_prefix + "/state", self.update_state)
 
         # Set the flag that signals if the simulation is running or not
         self._sim_running = False
@@ -277,9 +270,6 @@ class VehicleBatch():
         'remove_vehicle' from the VehicleManager in order to remove the vehicle from the list of active vehicles.
         """
 
-        SimulationManager.deregister_callback(self._cb_pre)
-        SimulationManager.deregister_callback(self._cb_post)
-
         # Remove this object from the vehicleHandler
         VehicleManager.get_vehicle_manager().remove_vehicle(self._stage_prefix)
 
@@ -400,10 +390,10 @@ class VehicleBatch():
         Args:
             dt (float): The time elapsed between the previous and current function calls (s).
         """
-        
+
         if self._sim_running == False:
             return
-                
+
         # Get the positions, orientations, linear velocities, and angular velocities of all vehicle prims in the inertial frame of reference   
         prims_positions, prims_orientations = self.vehicle_prims.get_world_poses()
         prims_linear_vel = self.vehicle_prims.get_linear_velocities()
@@ -452,15 +442,6 @@ class VehicleBatch():
             backend._vehicle = self
             backend.update_state(self._state)
 
-        #print(
-        #    "pos=", self._state.position[0].detach().cpu().numpy(),
-        #    "vel=", self._state.linear_velocity[0].detach().cpu().numpy(),
-        #    "ang_vel=", self._state.angular_velocity[0].detach().cpu().numpy(),
-        #)
-
-        self.sim_time_pos += dt
-
-        print(f"[POST] t={self.sim_time_pos:.3f} vel={self._state.linear_velocity[0].cpu().numpy()}")
 
     def start(self):
         """
