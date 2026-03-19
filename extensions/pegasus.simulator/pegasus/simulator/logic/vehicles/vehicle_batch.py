@@ -99,9 +99,6 @@ class VehicleBatch():
         # Variable that will hold the current state of the vehicle
         self._state = StateBatch(self.n_vehicles, self.device)
 
-        self.sim_time_pre = 0
-        self.sim_time_pos = 0
-
         # Add the update method to the physics callback if the world was received
         # so that we can apply forces and torques to the vehicle. Note, this method should 
         # be implemented in classes that inherit the vehicle object
@@ -429,7 +426,8 @@ class VehicleBatch():
 
         # Get the linear acceleration of the body relative to the inertial frame, expressed in the inertial frame
         # Note: we must do this approximation, since the Isaac sim does not output the acceleration of the rigid body directly
-        linear_acceleration = (linear_vel - self._state.linear_velocity) / dt
+        if dt > 0.0:
+            linear_acceleration = (linear_vel - self._state.linear_velocity) / dt
 
         # Update the state
         self._state.position = positions
@@ -452,15 +450,6 @@ class VehicleBatch():
             backend._vehicle = self
             backend.update_state(self._state)
 
-        #print(
-        #    "pos=", self._state.position[0].detach().cpu().numpy(),
-        #    "vel=", self._state.linear_velocity[0].detach().cpu().numpy(),
-        #    "ang_vel=", self._state.angular_velocity[0].detach().cpu().numpy(),
-        #)
-
-        self.sim_time_pos += dt
-
-        print(f"[POST] t={self.sim_time_pos:.3f} vel={self._state.linear_velocity[0].cpu().numpy()}")
 
     def start(self):
         """
