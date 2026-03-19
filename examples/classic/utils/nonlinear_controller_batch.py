@@ -333,6 +333,8 @@ class NonlinearControllerBatch(Backend):
         if self.vehicle:
             self.input_ref = self.vehicle.force_and_torques_to_velocities(u_1, tau)
 
+        print(f"[CTRL] t={self.total_time:.3f} input={self.input_ref[0].cpu().numpy()}")
+
         # ----------------------------
         # Statistics to save for later
         # ----------------------------
