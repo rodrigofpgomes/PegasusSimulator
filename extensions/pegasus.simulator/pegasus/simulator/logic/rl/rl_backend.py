@@ -12,7 +12,7 @@ class RLBackend(Backend):
         self,
         n_vehicles: int,
         device: str = "cuda",
-        max_rotor_vel: float = 1000.0,
+        #max_rotor_vel: float = 1000.0,
         parts_per_vehicle: int = 5,
         action_mode: str = "direct_force",
     ):
@@ -20,7 +20,7 @@ class RLBackend(Backend):
 
         self.n_vehicles = n_vehicles
         self.device = device
-        self.max_rotor_vel = max_rotor_vel
+        #self.max_rotor_vel = max_rotor_vel
         self.parts_per_vehicle = parts_per_vehicle
         self.action_mode = action_mode
 
@@ -56,7 +56,7 @@ class RLBackend(Backend):
             self.input_ref = self.vehicle.force_and_torques_to_velocities(u_1, tau) # (n_envs, 4)
 
         if self.action_mode == "direct_force":
-            self.input_ref = self._actions
+            self.input_actions = self._actions
 
 
     def input_mode(self) -> str:
@@ -64,6 +64,9 @@ class RLBackend(Backend):
 
     def input_reference(self) -> torch.Tensor:
         return self.input_ref
+    
+    def input_actions(self) -> torch.Tensor:
+        return self.input_actions
         
 
     def start(self):
