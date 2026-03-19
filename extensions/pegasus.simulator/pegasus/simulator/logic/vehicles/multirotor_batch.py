@@ -120,9 +120,9 @@ class MultirotorBatch(VehicleBatch):
         
 
         # Extract body and rotor poses
-        body_pos = pos[:, body_index, :]       # (n_vehicles, 3)
-        body_quat = quat[:, body_index, :]     # (n_vehicles, 4)
-        rotor_pos = pos[:, body_index + 1:, :]     # (n_vehicles, num_rotors, 3)
+        body_pos = pos[:, self.body_index, :]       # (n_vehicles, 3)
+        body_quat = quat[:, self.body_index, :]     # (n_vehicles, 4)
+        rotor_pos = pos[:, self.body_index + 1:, :]     # (n_vehicles, num_rotors, 3)
 
         # Compute rotor positions relative to the body in the world frame
         relative_pos_world = rotor_pos - body_pos.unsqueeze(1)
@@ -205,14 +205,10 @@ class MultirotorBatch(VehicleBatch):
         if self._sim_running == False:
             return
 
-        self.sim_time_pre += dt
-
         # Call the update methods in all backends
         for backend in self._backends:
             backend._vehicle = self
             backend.update(dt)
-
-        print(f"[PRE] t={self.sim_time_pre:.3f}")
 
         # TODO:  Generate the rotating propeller visual effect
         # self.handle_propeller_visual(i, forces_z[i], articulation)
