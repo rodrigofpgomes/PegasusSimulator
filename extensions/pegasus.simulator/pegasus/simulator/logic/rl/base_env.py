@@ -37,7 +37,7 @@ class PegasusEnvCfg:
     sim_dt: float = 0.01  # Duration of one physics step [s]
 
     # Execution device
-    device: str = "cuda"
+    #device: str = "cuda"
 
 
 class PegasusEnv(ABC):
@@ -69,7 +69,7 @@ class PegasusEnv(ABC):
         self.cfg = cfg
         self.backend = backend
         self.reset_manager = reset_manager
-        self.device = cfg.device
+        self.device = backend.device
 
         # Basic environment dimensions inferred from the backend and config
         self.num_envs = backend.n_vehicles
