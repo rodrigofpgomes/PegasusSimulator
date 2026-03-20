@@ -98,7 +98,7 @@ class MultirotorBatch(VehicleBatch):
         self._thrusters = config.thrust_curve
         self._drag = config.drag
 
-        self.input_mode = None
+        self._input_mode = None
         self._external_forces = None
         self._external_torques = None
         self._desired_rotor_velocities = None
@@ -112,17 +112,17 @@ class MultirotorBatch(VehicleBatch):
         with respect to the body.
         """
 
-        pos, quat = self.vehicle_prims.get_world_poses()
+        pos, quat = self._vehicle_prims.get_world_poses()
 
         # Reshape from (n_vehicles * parts_per_vehicle, 3) to (n_vehicles, parts_per_vehicle, 3)
-        pos = torch.as_tensor(pos, dtype=torch.float32, device=self.device).reshape(self.n_vehicles, self.parts_per_vehicle, 3)
-        quat = torch.as_tensor(quat, dtype=torch.float32, device=self.device).reshape(self.n_vehicles, self.parts_per_vehicle, 4)
+        pos = torch.as_tensor(pos, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 3)
+        quat = torch.as_tensor(quat, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 4)
         
 
         # Extract body and rotor poses
-        body_pos = pos[:, self.body_index, :]       # (n_vehicles, 3)
-        body_quat = quat[:, self.body_index, :]     # (n_vehicles, 4)
-        rotor_pos = pos[:, self.body_index + 1:, :]     # (n_vehicles, num_rotors, 3)
+        body_pos = pos[:, self._body_index, :]       # (n_vehicles, 3)
+        body_quat = quat[:, self._body_index, :]     # (n_vehicles, 4)
+        rotor_pos = pos[:, self._body_index + 1:, :]     # (n_vehicles, num_rotors, 3)
 
         # Compute rotor positions relative to the body in the world frame
         relative_pos_world = rotor_pos - body_pos.unsqueeze(1)
@@ -131,7 +131,7 @@ class MultirotorBatch(VehicleBatch):
         body_quat_expanded = body_quat.unsqueeze(1).expand(-1, self._thrusters._num_rotors, -1)
 
         # Rotate relative positions into the body frame
-        self._rotor_positions_body = quat_rotate_inverse(body_quat_expanded.reshape(-1, 4), relative_pos_world.reshape(-1, 3)).view(self.n_vehicles, self._thrusters._num_rotors, 3)
+        self._rotor_positions_body = quat_rotate_inverse(body_quat_expanded.reshape(-1, 4), relative_pos_world.reshape(-1, 3)).view(self._n_vehicles, self._thrusters._num_rotors, 3)
 
 
     def _cache_allocation_matrix(self):
@@ -153,7 +153,7 @@ class MultirotorBatch(VehicleBatch):
         km = self._thrusters._rolling_moment_coefficient
         rot_dir = self._thrusters._rot_dir.to(torch.float32)
 
-        self._allocation_matrix = torch.zeros((4, self._thrusters._num_rotors), dtype=torch.float32, device=self.device)
+        self._allocation_matrix = torch.zeros((4, self._thrusters._num_rotors), dtype=torch.float32, device=self._device)
 
         # Total thrust contribution
         self._allocation_matrix[0, :] = kf
@@ -216,36 +216,20 @@ class MultirotorBatch(VehicleBatch):
         # Get the articulation root of the vehicle -> rotating propeller visual effect
         # articulation = ...
 
-        # ------------------------------------------------------------------
-        # MODE 1: Direct application of forces and torques
-        # ------------------------------------------------------------------
-        if self.input_mode == "forces_torques" and self._external_forces is not None and self._external_torques is not None:
 
-            forces = self._external_forces.clone()
-            torques = self._external_torques.clone()
+        # Rotor angular velocities - self.input_mode == "rotor_velocity"
+        if self._input_mode == "rotor_velocity":
 
-            # optional: add drag
-            # drag = self._drag.update(self._state, dt)
-            # forces[:, 0, :] += drag
-
-        # ------------------------------------------------------------------
-        # MODE 2: Rotor angular velocities
-        # ------------------------------------------------------------------
-        else:
-            if self._desired_rotor_velocities is not None:
-                desired_rotor_velocities = self._desired_rotor_velocities
-
-            elif len(self._backends) != 0:
+            if len(self._backends) != 0:
                 desired_rotor_velocities = self._backends[0].input_reference()
-
             else:
-                desired_rotor_velocities = torch.zeros((self.n_vehicles, self._thrusters._num_rotors), dtype=torch.float32, device=self.device)
+                desired_rotor_velocities = torch.zeros((self._n_vehicles, self._thrusters._num_rotors), dtype=torch.float32, device=self._device)
 
             # Input the desired rotor velocities in the thruster model
             self._thrusters.set_input_reference(desired_rotor_velocities)
 
-            forces = torch.zeros((self.n_vehicles, self.parts_per_vehicle, 3), dtype=torch.float32, device=self.device)
-            torques = torch.zeros((self.n_vehicles, self.parts_per_vehicle, 3), dtype=torch.float32, device=self.device)
+            forces = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
+            torques = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
 
             # Get the desired forces to apply to the rotors vehicles and the desired rolling_moment
             forces_z, _, rolling_moment = self._thrusters.update(self._state, dt)
@@ -259,6 +243,15 @@ class MultirotorBatch(VehicleBatch):
             # drag = self._drag.update(self._state, dt)
 
             # forces[:, 0, :] += drag
+        
+        # Direct application of forces and torques - self.input_mode == "forces_torques"
+        else:
+            forces, torques = self._backends[0].get_forces_and_torques()
+
+            # optional: add drag
+            # drag = self._drag.update(self._state, dt)
+            # forces[:, 0, :] += drag
+
 
         # Apply the forces and torques to the vehicle in the simulator
         self.apply_forces_and_torques_all_parts(forces, torques)
@@ -302,23 +295,6 @@ class MultirotorBatch(VehicleBatch):
         return ang_vel
 
     
-    def set_forces_and_torques(self, forces: torch.Tensor, torques: torch.Tensor):
-        assert forces.shape == (self.n_vehicles, self.parts_per_vehicle, 3)
-        assert torques.shape == (self.n_vehicles, self.parts_per_vehicle, 3)
+    def set_input_mode(self, input_mode: str):
+        self._input_mode = input_mode
 
-        self.input_mode = "forces_torques"
-        self._external_forces = forces.to(device=self.device, dtype=torch.float32)
-        self._external_torques = torques.to(device=self.device, dtype=torch.float32)
-
-
-    def set_rotor_velocities(self, rotor_velocities: torch.Tensor):
-        assert rotor_velocities.shape == (self.n_vehicles, self._thrusters._num_rotors)
-
-        self.input_mode = "rotor_velocity"
-        self._desired_rotor_velocities = rotor_velocities.to(device=self.device, dtype=torch.float32)
-
-
-    def clear_inputs(self):
-        self._external_forces = None
-        self._external_torques = None
-        self._desired_rotor_velocities = None

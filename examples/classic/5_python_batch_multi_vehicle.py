@@ -114,6 +114,7 @@ class PegasusApp:
                 Kr=[2.0, 2.0, 2.0],
                 n_vehicles=n_vehicles,
                 device=self.pg._world_settings["device"],
+                action_mode = "forces_torques"
             )
         ]
 

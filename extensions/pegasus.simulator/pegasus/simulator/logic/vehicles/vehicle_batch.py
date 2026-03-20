@@ -71,7 +71,7 @@ class VehicleBatch():
         """
 
         # Define the same device that is running the simulation
-        self.device = PegasusInterface()._world_settings["device"]
+        self._device = PegasusInterface()._world_settings["device"]
 
         # Get the current world at which we want to spawn the vehicle
         self._world = PegasusInterface().world
@@ -81,20 +81,20 @@ class VehicleBatch():
         # and the name of the .usd file that contains its description
         self._stage_prefix = get_stage_next_free_path(self._stage, stage_prefix, False)
         self._usd_file = usd_path
-        self.n_vehicles = n_vehicles
+        self._n_vehicles = n_vehicles
 
         self._vehicle_name = self._stage_prefix.rpartition("/")[-1]
 
         # Spawn the batch of vehicle's in the world's stage
         self._spawn_batch(init_pos, init_orientation, spacing)
 
-        self.parts_per_vehicle = None
+        self._parts_per_vehicle = None
         
-        self.body_index = None
+        self._body_index = None
 
         # View batch prims
         self._vehicle_expr = f"{self._stage_prefix}.*/.*"
-        self.vehicle_prims = RigidPrim(prim_paths_expr=self._vehicle_expr, name=f"{self._stage_prefix}_prims")
+        self._vehicle_prims = RigidPrim(prim_paths_expr=self._vehicle_expr, name=f"{self._stage_prefix}_prims")
 
         # Variable that will hold the current state of the vehicle
         self._state = StateBatch(self.n_vehicles, self.device)
@@ -157,25 +157,25 @@ class VehicleBatch():
         # --------------------------------------------------------------------
         self._backends = backends
 
-        #Initialize the backends
-        for backend in self._backends:
-            backend.initialize(self)
-
-
 
     def initialize(self):
         """
         This method initialize the vehicle prim handles and allocate batched state tensors.
         """
-        self.vehicle_prims.initialize()
+        self._vehicle_prims.initialize()
 
-        self.parts_per_vehicle = self.vehicle_prims.count // self.n_vehicles
+        self._parts_per_vehicle = self._vehicle_prims.count // self._n_vehicles
 
-        print(f"Spawned {self.n_vehicles} vehicles with {self.parts_per_vehicle} parts each (total {self.vehicle_prims.count} prims)")
+        print(f"Spawned {self._n_vehicles} vehicles with {self._parts_per_vehicle} parts each (total {self._vehicle_prims.count} prims)")
 
-        self.body_index = next((i for i, p in enumerate(self.vehicle_prims.prim_paths[:self.parts_per_vehicle]) if p.endswith("/body")), None)
+        self._body_index = next((i for i, p in enumerate(self._vehicle_prims.prim_paths[:self._parts_per_vehicle]) if p.endswith("/body")), None)
 
         self._allocate_batch_state()
+
+        #Initialize the backends
+        for backend in self._backends:
+            backend.initialize(self)
+
 
 
     def _spawn_batch(self, init_pos=None, init_orientation=None, spacing=3.0):
@@ -192,7 +192,7 @@ class VehicleBatch():
         # If explicit initial positions were provided, spawn each vehicle manually
         if init_pos is not None:
 
-            for i in range(self.n_vehicles):
+            for i in range(self._n_vehicles):
                 
                 # Create the prim path for this vehicle instance
                 prim_path = f"{self._stage_prefix}_{i}"
@@ -249,8 +249,8 @@ class VehicleBatch():
         #vehicles.set_world_poses(init_pos, init_orientation)
 
         # Store them as tensors for later use
-        self.init_pos = torch.as_tensor(init_pos, dtype=torch.float32, device=self.device)
-        self.init_orientation = torch.as_tensor(init_orientation, dtype=torch.float32, device=self.device)
+        self._init_pos = torch.as_tensor(init_pos, dtype=torch.float32, device=self.device)
+        self._init_orientation = torch.as_tensor(init_orientation, dtype=torch.float32, device=self.device)
 
         #print(f"Initialized {self.n_vehicles} vehicles at positions: {self.init_pos} and orientations: {self.init_orientation}")
 
@@ -302,6 +302,22 @@ class VehicleBatch():
         """
         return self._stage_prefix.rpartition("/")[-1]
 
+    @property
+    def n_vehicles(self):
+        return self._n_vehicles
+
+    @property
+    def parts_per_vehicle(self):
+        return self._parts_per_vehicle
+
+    @property
+    def device(self):
+        return self._device
+
+    @property
+    def body_index(self):
+        return self._body_index
+
     """
     Operations
     """
@@ -316,8 +332,6 @@ class VehicleBatch():
 
         # If the start/stop button was pressed, then call the start and stop methods accordingly
         if self._world.is_playing() and self._sim_running == False:
-            self._sim_running = True
-
             # Initialize the sensors
             #for sensor in self._sensors:
             #    sensor.start()
@@ -326,12 +340,15 @@ class VehicleBatch():
             #for graphical_sensor in self._graphical_sensors:
             #    graphical_sensor.start()
 
+            # Invoke the start method of the vehicle (if it exists)
+            self.start()
+
             # Intializes the communication with all the backends. This method is invoked automatically when the simulation starts
             for backend in self._backends:
                 backend.start()
 
-            # Invoke the start method of the vehicle (if it exists)
-            self.start()
+            self._sim_running = True
+
 
         if self._world.is_stopped() and self._sim_running == True:
             self._sim_running = False
@@ -364,15 +381,15 @@ class VehicleBatch():
             - The mapping between tensor rows and prim paths follows self.prims.prim_paths order.
         """
 
-        forces = forces.reshape((self.vehicle_prims.count, 3))
+        forces = forces.reshape((self._vehicle_prims.count, 3))
         
-        torques = torques.reshape((self.vehicle_prims.count, 3))
+        torques = torques.reshape((self._vehicle_prims.count, 3))
 
         #print("Applying forces:", forces)
         #print("Applying torques:", torques)
 
         # Apply the force to the rigidbody. The force should be expressed in the rigidbody frame
-        self.vehicle_prims.apply_forces_and_torques_at_pos(forces, torques, is_global=False)
+        self._vehicle_prims.apply_forces_and_torques_at_pos(forces, torques, is_global=False)
 
     def get_batch_layout_info(self):
         """
@@ -381,10 +398,10 @@ class VehicleBatch():
 
         return {
             "vehicle_prefix": self._stage_prefix,
-            "n_vehicles": self.n_vehicles,
-            "n_parts_per_vehicle": self.parts_per_vehicle,
-            "n_total_prims": self.vehicle_prims.count,
-            "prim_paths": list(self.vehicle_prims.prim_paths),
+            "n_vehicles": self._n_vehicles,
+            "n_parts_per_vehicle": self._parts_per_vehicle,
+            "n_total_prims": self._vehicle_prims.count,
+            "prim_paths": list(self._vehicle_prims.prim_paths),
         }
 
 
@@ -402,32 +419,34 @@ class VehicleBatch():
             return
                 
         # Get the positions, orientations, linear velocities, and angular velocities of all vehicle prims in the inertial frame of reference   
-        prims_positions, prims_orientations = self.vehicle_prims.get_world_poses()
-        prims_linear_vel = self.vehicle_prims.get_linear_velocities()
-        prims_angular_vel = self.vehicle_prims.get_angular_velocities()
+        prims_positions, prims_orientations = self._vehicle_prims.get_world_poses()
+        prims_linear_vel = self._vehicle_prims.get_linear_velocities()
+        prims_angular_vel = self._vehicle_prims.get_angular_velocities()
 
         # Reshape from (n_vehicles * parts_per_vehicle, 3) to (n_vehicles, parts_per_vehicle, 3)
-        prims_positions = torch.as_tensor(prims_positions, dtype=torch.float32, device=self.device).reshape(self.n_vehicles, self.parts_per_vehicle, 3)
-        prims_orientations = torch.as_tensor(prims_orientations, dtype=torch.float32, device=self.device).reshape(self.n_vehicles, self.parts_per_vehicle, 4)
-        prims_linear_vel = torch.as_tensor(prims_linear_vel, dtype=torch.float32, device=self.device).reshape(self.n_vehicles, self.parts_per_vehicle, 3)
-        prims_angular_vel = torch.as_tensor(prims_angular_vel, dtype=torch.float32, device=self.device).reshape(self.n_vehicles, self.parts_per_vehicle, 3)
+        prims_positions = torch.as_tensor(prims_positions, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 3)
+        prims_orientations = torch.as_tensor(prims_orientations, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 4)
+        prims_linear_vel = torch.as_tensor(prims_linear_vel, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 3)
+        prims_angular_vel = torch.as_tensor(prims_angular_vel, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 3)
 
         # Use the body prim of each vehicle as the reference frame for the state
 
         # Get the current position of the body in the inertial frame and its orientation relative to the inertial frame
-        positions = prims_positions[:, self.body_index, :]
-        orientations = prims_orientations[:, self.body_index, :]
+        positions = prims_positions[:, self._body_index, :]
+        orientations = prims_orientations[:, self._body_index, :]
 
         # The linear velocity [x_dot, y_dot, z_dot] of the vehicle's body frame expressed in the inertial frame of reference
-        linear_vel = prims_linear_vel[:, self.body_index, :]
+        linear_vel = prims_linear_vel[:, self._body_index, :]
         
         # Get the angular velocity of the vehicle expressed in the body frame of reference
-        angular_vel = prims_angular_vel[:, self.body_index, :]
+        angular_vel = prims_angular_vel[:, self._body_index, :]
 
         # Get the linear acceleration of the body relative to the inertial frame, expressed in the inertial frame
         # Note: we must do this approximation, since the Isaac sim does not output the acceleration of the rigid body directly
         if dt > 0.0:
             linear_acceleration = (linear_vel - self._state.linear_velocity) / dt
+        else:
+            linear_acceleration = torch.zeros_like(linear_vel)
 
         # Update the state
         self._state.position = positions
