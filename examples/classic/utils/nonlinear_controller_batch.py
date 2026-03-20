@@ -49,14 +49,21 @@ class NonlinearControllerBatch(Backend):
         Kr=[3.5, 3.5, 3.5],
         Kw=[0.5, 0.5, 0.5],
         n_vehicles=1,
-        device = "cpu"
+        device = "cpu",
+        action_mode: str = "direct_force"
     ):
+
+        self._action_mode = action_mode
 
         # Set device
         self.device = device
 
         # The current rotor references [rad/s]
         self.input_ref = torch.zeros((n_vehicles, 4), dtype=torch.float32, device=device)
+
+        self._forces = torch.zeros((n_vehicles, 5, 3), dtype=torch.float32, device=device)
+        self._torques = torch.zeros((n_vehicles, 5, 3), dtype=torch.float32, device=device)
+
 
         # The current state of the vehicle expressed in the inertial frame (in ENU)
         self.p = torch.zeros((n_vehicles, 3), dtype=torch.float32, device=device)                   # The vehicle position
@@ -139,6 +146,8 @@ class NonlinearControllerBatch(Backend):
         """
         Reset the control and trajectory index
         """
+        self.vehicle.set_input_mode(input_mode=self._action_mode)
+
         self.reset_statistics()
         
 
@@ -330,9 +339,13 @@ class NonlinearControllerBatch(Backend):
 
         # Use the allocation matrix provided by the Multirotor vehicle to convert the desired force and torque
         # to angular velocity [rad/s] references to give to each rotor
-        if self.vehicle:
-            self.input_ref = self.vehicle.force_and_torques_to_velocities(u_1, tau)
-            
+        #if self.vehicle:
+        self.input_ref = self.vehicle.force_and_torques_to_velocities(u_1, tau)
+
+        # For apply directly forces and torques on the body
+        self._forces[:, self.vehicle.body_index, 2] = u_1
+        self._torques[:, self.vehicle.body_index, :] = tau
+
         # ----------------------------
         # Statistics to save for later
         # ----------------------------
@@ -343,6 +356,9 @@ class NonlinearControllerBatch(Backend):
         self.velocity_error_over_time.append(ev)
         self.atittude_error_over_time.append(e_R)
         self.attitude_rate_error_over_time.append(e_w)
+
+    def get_forces_and_torques(self) -> tuple[torch.Tensor, torch.Tensor]:
+        return self._forces, self._torques
 
     @staticmethod
     def vee_batch(S):
