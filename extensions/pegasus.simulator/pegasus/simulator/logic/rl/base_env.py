@@ -1,257 +1,200 @@
 """
-| File: pegasus_env.py
-| Author: Rodrigo Gomes
-| Description: Base class for all reinforcement learning environments in Pegasus.
-| License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
+| File: base_env.py
+| Description: Base class for all RL environments in Pegasus (Isaac Lab style).
+| License: BSD-3-Clause.
+
+Terminated vs Truncated — critical distinction for correct GAE:
+
+    terminated: agent reached a terminal state (crash, out of bounds).
+                No bootstrap — V(s_terminal) = 0.
+                rsl_rl: dones=True, time_outs=False
+
+    truncated:  episode ended by timeout (max_episode_length reached).
+                Bootstrap — V(s_last) != 0, episode continues hypothetically.
+                rsl_rl: dones=True, time_outs=True
+
+Isaac Lab implementation (DirectRLEnv):
+    - episode_length_buf is incremented BEFORE computing dones
+    - truncated = episode_length_buf >= max_episode_length - 1
+    - reset happens AFTER dones are computed and returned
+    - infos["time_outs"] = truncated  ← rsl_rl uses this for GAE bootstrap
+
+This file replicates that behaviour exactly.
 """
 from __future__ import annotations
-
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-
 import torch
-
 
 __all__ = ["PegasusEnv", "PegasusEnvCfg"]
 
 
 @dataclass
 class PegasusEnvCfg:
-    """
-    Configuration class for Pegasus reinforcement learning environments.
-
-    This class stores the common configuration parameters shared by all RL
-    environments, such as the dimensions of the observation and action spaces,
-    episode duration, simulation timing, and execution device.
-    """
-
-    # Dimensions of the environment spaces. These are expected to be defined
-    # by each specific task/environment implementation.
-    observation_space: int = 0
-    action_space: int = 0
-    state_space: int = 0  # Optional asymmetric critic state dimension
-
-    # Timing configuration
-    episode_length_s: float = 5.0
-    decimation: int = 2  # Number of physics steps executed per policy step
-    sim_dt: float = 0.01  # Duration of one physics step [s]
-
-    # Execution device
-    #device: str = "cuda"
+    observation_space: int   = 0
+    action_space:      int   = 0
+    state_space:       int   = 0    # asymmetric critic (optional)
+    episode_length_s:  float = 10.0
+    decimation:        int   = 2    # physics steps per policy step
+    sim_dt:            float = 0.01
 
 
 class PegasusEnv(ABC):
     """
-    Base class for all reinforcement learning environments in Pegasus.
+    Base class for all RL environments in Pegasus.
+    Replicates Isaac Lab's DirectRLEnv interface exactly.
 
-    This class defines the common interface and execution flow for RL tasks.
-    Each task should inherit from this class and implement the required
-    abstract methods that define how actions are processed, applied to the
-    simulator, and how observations, rewards, terminations, and resets are handled.
-
-    Inspired by the DirectRLEnv abstraction from Isaac Lab.
+    Key design points matching Isaac Lab:
+    1. episode_length_buf is incremented BEFORE _get_dones()
+    2. truncated = episode_length_buf >= max_episode_length - 1
+    3. _reset_idx() is called AFTER obs/reward/dones are computed
+    4. infos["time_outs"] = truncated for rsl_rl GAE bootstrap
+    5. reset() returns obs from AFTER the physical reset (initial state)
     """
 
-    def __init__(
-        self,
-        cfg: PegasusEnvCfg,
-        backend,
-        reset_manager,
-    ):
-        """
-        Initialize the PegasusEnv object.
-
-        Args:
-            cfg (PegasusEnvCfg): Configuration object for the environment.
-            backend: Backend responsible for managing the vehicles/actions.
-            reset_manager: Utility object responsible for environment resets.
-        """
-        self.cfg = cfg
-        self.backend = backend
+    def __init__(self, cfg: PegasusEnvCfg, backend, reset_manager):
+        self.cfg           = cfg
+        self.backend       = backend
         self.reset_manager = reset_manager
-        self.device = backend.device
 
-        # Basic environment dimensions inferred from the backend and config
-        self.num_envs = backend.n_vehicles
-        self.parts_per_vehicle = backend.parts_per_vehicle
-        self.num_obs = cfg.observation_space
+        self.num_envs    = backend.n_vehicles
+        self.num_obs     = cfg.observation_space
         self.num_actions = cfg.action_space
 
-        # Per-environment episode step counters with shape [num_envs]
-        self.episode_length_buf = torch.zeros(
-            self.num_envs, dtype=torch.long, device=self.device
-        )
-
-        # Maximum episode duration measured in policy steps
-        self.max_episode_length = int(
-            cfg.episode_length_s / (cfg.sim_dt * cfg.decimation)
-        )
+        self.max_episode_length   = int(cfg.episode_length_s / (cfg.sim_dt * cfg.decimation))
         self.max_episode_length_s = cfg.episode_length_s
+        self.step_dt              = cfg.sim_dt * cfg.decimation
 
-        # Duration of a single policy step in seconds
-        self.step_dt = cfg.sim_dt * cfg.decimation
-
-        # Dictionary used to expose extra information for logging/debugging.
-        # This is typically populated during resets.
-        self.extras: dict = {}
-
-        # External callbacks to be executed after a reset.
-        # For example, this can be used by recurrent runners to reset hidden states.
+        self.extras: dict  = {}
         self._reset_callbacks: list = []
 
-    """
-    Public API
-    """
+        # Allocated in setup() — device not available before start()
+        self.episode_length_buf = None
+
+        # Expose termination flags for logging
+        self.reset_terminated = None
+        self.reset_time_outs  = None
+
+    def setup(self):
+        """
+        Called by the train script after timeline.play() + world.step(),
+        when device and parts_per_vehicle are available via backend.
+        """
+        d = self.device
+        self.episode_length_buf = torch.zeros(self.num_envs, dtype=torch.long, device=d)
+        self.reset_terminated   = torch.zeros(self.num_envs, dtype=torch.bool, device=d)
+        self.reset_time_outs    = torch.zeros(self.num_envs, dtype=torch.bool, device=d)
+
+    @property
+    def device(self) -> str:
+        return self.backend.device
+
+    @property
+    def parts_per_vehicle(self) -> int:
+        return self.backend.parts_per_vehicle
+
+    # ── public API ────────────────────────────────────────────
 
     def step(self, actions: torch.Tensor):
         """
-        Advance the environment by one policy step.
+        Advance by one policy step (decimation physics steps).
 
-        Internally, this executes `decimation` physics steps for each policy step.
-
-        Args:
-            actions (torch.Tensor): Tensor containing the actions to be applied.
-
-        Returns:
-            tuple: A tuple with:
-                - observations
-                - rewards
-                - terminated flags
-                - truncated flags
-                - extras dictionary
+        Isaac Lab ordering (replicated exactly):
+            1. _pre_physics_step(actions)
+            2. decimation × [_apply_action(), world.step()]
+            3. episode_length_buf += 1          ← BEFORE dones
+            4. _get_observations()
+            5. _get_rewards()
+            6. _get_dones()                     ← uses updated buf
+            7. populate extras["time_outs"]     ← before reset
+            8. _reset_idx(reset_ids)            ← AFTER all outputs
         """
-        # Process the raw actions before stepping the physics simulation
         self._pre_physics_step(actions)
 
-        # Execute multiple physics steps for each policy step
         for _ in range(self.cfg.decimation):
             self._apply_action()
             self._world_step()
 
-        # Gather environment outputs after the physics updates
         self.episode_length_buf += 1
-        obs = self._get_observations()
+
         reward = self._get_rewards()
         terminated, truncated = self._get_dones()
 
-        # Automatically reset environments that have terminated or been truncated
+        # Store for logging and external access
+        self.reset_terminated = terminated
+        self.reset_time_outs = truncated
+
+        self.extras["time_outs"] = truncated
+        
+        # Reset only after all outputs are computed
         reset_ids = (terminated | truncated).nonzero(as_tuple=False).squeeze(-1)
         if reset_ids.numel() > 0:
             self._reset_idx(reset_ids)
+
+        obs = self._get_observations()
 
         return obs, reward, terminated, truncated, self.extras
 
     def reset(self):
         """
         Reset all environments.
+        Returns obs from the initial state (after physical reset).
 
-        Returns:
-            tuple: A tuple containing:
-                - observations after reset
-                - extras dictionary
+        Isaac Lab spreads resets to avoid spikes:
+            episode_length_buf = randint(0, max_episode_length)
+        We replicate this with init_at_random_ep_len in rsl_rl runner.
         """
         ids = torch.arange(self.num_envs, device=self.device)
         self._reset_idx(ids)
-        return self._get_observations(), self.extras
+        obs, _ = self._get_observations(), self.extras
+        return obs, self.extras
 
     def register_reset_callback(self, fn):
-        """
-        Register a callback to be invoked after each partial reset.
-
-        This is useful for external runners that need to clear auxiliary state,
-        such as the hidden state of an LSTM policy.
-
-        Args:
-            fn (callable): A function with signature:
-                fn(env_ids: torch.Tensor) -> None
-        """
         self._reset_callbacks.append(fn)
 
-    """
-    Internal helper methods
-    """
+    # ── internal ──────────────────────────────────────────────
 
     def _world_step(self):
-        """
-        Advance the simulator by one physics step.
-
-        The simulator world object is expected to be injected externally
-        (for example by the training script).
-        """
         if hasattr(self, "_world"):
             self._world.step(render=False)
 
     def _call_reset_callbacks(self, env_ids: torch.Tensor):
-        """
-        Execute all registered reset callbacks for the given environments.
-
-        Args:
-            env_ids (torch.Tensor): Tensor with the ids of the environments
-                that were reset.
-        """
         for fn in self._reset_callbacks:
             fn(env_ids)
 
-    """
-    Mandatory task interface
-    """
+    # ── mandatory task interface ──────────────────────────────
 
     @abstractmethod
-    def _pre_physics_step(self, actions: torch.Tensor):
-        """
-        Process the actions before the physics step is executed.
-
-        Args:
-            actions (torch.Tensor): Tensor containing the policy actions.
-        """
-        pass
+    def _pre_physics_step(self, actions: torch.Tensor): ...
 
     @abstractmethod
-    def _apply_action(self):
-        """
-        Apply the processed actions to the simulator/backend.
-        """
-        pass
+    def _apply_action(self): ...
 
     @abstractmethod
-    def _get_observations(self) -> dict:
-        """
-        Construct and return the current observations.
-
-        Returns:
-            dict: Observation dictionary for the current environment state.
-        """
-        pass
+    def _get_observations(self) -> dict: ...
 
     @abstractmethod
-    def _get_rewards(self) -> torch.Tensor:
-        """
-        Compute the reward for each environment.
-
-        Returns:
-            torch.Tensor: Tensor containing the rewards for all environments.
-        """
-        pass
+    def _get_rewards(self) -> torch.Tensor: ...
 
     @abstractmethod
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Compute the termination and truncation signals.
+        Returns (terminated, truncated).
 
-        Returns:
-            tuple[torch.Tensor, torch.Tensor]:
-                - terminated flags
-                - truncated flags
+        terminated: True when a fatal condition occurs (crash, OOB).
+                    rsl_rl will NOT bootstrap these — V(s) = 0.
+
+        truncated:  True when episode_length_buf >= max_episode_length - 1.
+                    rsl_rl WILL bootstrap these — V(s) != 0.
+                    Use self.episode_length_buf for this check.
         """
-        pass
+        ...
 
     @abstractmethod
     def _reset_idx(self, env_ids: torch.Tensor):
         """
-        Reset a subset of environments.
-
-        Args:
-            env_ids (torch.Tensor): Tensor with the ids of the environments
-                that should be reset.
+        Reset selected environments.
+        Called AFTER obs/reward/dones are computed and returned.
+        Must reset episode_length_buf[env_ids] = 0.
         """
-        pass
+        ...
