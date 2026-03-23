@@ -19,10 +19,11 @@ from isaacsim import SimulationApp
 def parse_args():
     p = argparse.ArgumentParser()
     p.add_argument("--checkpoint", required=True, help="Path to checkpoint .pt")
-    p.add_argument("--task", default="quadcopter", choices=["quadcopter"])
-    p.add_argument("--preset", default="isaac_lab_exact", choices=["isaac_lab_exact", "tuned"])
-    p.add_argument("--n_envs", type=int, default=4)
-    p.add_argument("--device", default="cuda")
+    p.add_argument("--task",    default="quadcopter")
+    p.add_argument("--preset",  default="isaac_lab",
+                   help="Preset name from agents/<algo>_cfg.PRESETS")
+    p.add_argument("--n_envs",  type=int,   default=4)
+    p.add_argument("--device",  default="cuda")
     p.add_argument("--headless", action="store_true")
     return p.parse_args()
 
@@ -37,10 +38,8 @@ from omni.isaac.core.world import World
 import isaacsim.core.utils.prims as prim_utils
 
 from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
-from pegasus.simulator.logic.vehicles.multirotor_batch import (
-    MultirotorBatch,
-    MultirotorBatchConfig,
-)
+from pegasus.simulator.logic.vehicles.multirotor_batch import MultirotorBatch, MultirotorBatchConfig
+
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.rl import RLBackend, ResetManager
 
@@ -51,7 +50,6 @@ from rsl_rl.modules.distribution import GaussianDistribution
 # Adjust these imports if your project layout differs
 sys.path.insert(0, os.path.dirname(__file__))
 from tasks.quadcopter.quadcopter_env import QuadcopterEnv, QuadcopterEnvCfg
-from tasks.quadcopter.agents.ppo_cfg import PRESETS
 from pegasus.simulator.logic.rl.algorithms.wrappers.rsl_rl_wrapper import RslRlVecEnvWrapper
 
 
@@ -154,8 +152,12 @@ def act(policy, obs):
 def main():
     device = args.device
     n_envs = args.n_envs
+
+    from tasks.quadcopter.agents.ppo_cfg import PRESETS
+    if args.preset not in PRESETS:
+        raise KeyError(f"Preset '{args.preset}' not found. Available: {list(PRESETS.keys())}")
     agent_cfg = PRESETS[args.preset]
-    env_cfg = QuadcopterEnvCfg()
+    env_cfg   = QuadcopterEnvCfg()
 
     # Simulator
     pg = PegasusInterface()
