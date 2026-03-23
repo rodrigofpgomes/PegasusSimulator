@@ -63,23 +63,14 @@ class QuadcopterEnvCfg(PegasusEnvCfg):
     # ── goal randomisation — exact Isaac Lab values ────────────
     goal_pos_xy_range: List[float] = field(default_factory=lambda: [-2.0, 2.0])
     goal_pos_z_range:  List[float] = field(default_factory=lambda: [0.5, 1.5])
-    #randomize_goal:    bool         = True
+
 
 
 class QuadcopterEnv(PegasusEnv):
     """
-    Quadcopter hover environment — exact Isaac Lab replica.
+    Quadcopter hover environment that replicates the "quadcopter" environment considered in Isaac Lab.
 
-    Isaac Lab uses robot-frame velocities in the observation.
-    Specifically:
-        root_lin_vel_b  = linear velocity in body frame
-        root_ang_vel_b  = angular velocity in body frame
-        projected_gravity_b = gravity vector projected into body frame
-        desired_pos_b   = goal position in body frame
-
-    Our StateBatch provides world-frame quantities.
-    We replicate the Isaac Lab obs exactly by computing body-frame
-    quantities from the quaternion.
+    This environment is designed for hover and goal-reaching tasks.
     """
     cfg: QuadcopterEnvCfg
 
@@ -90,41 +81,47 @@ class QuadcopterEnv(PegasusEnv):
         self._goal_pos = None
         self._episode_sums = {}
 
-    def setup(self):
-        """Called after timeline.play() + world.step()."""
-        super().setup()
-        d = self.device
 
-        self._actions  = torch.zeros((self.num_envs, self.cfg.action_space), device=d)
-        self._goal_pos = torch.zeros((self.num_envs, 3), device=d)
+    def setup(self):
+        """
+        Method that initializes environment buffers and episode tracking variables.
+        It assumes that the simulation timeline is active and the world has been stepped at least once.
+        """
+
+        super().setup()
+
+        self._actions  = torch.zeros((self.num_envs, self.cfg.action_space), device=self.device)
+        self._goal_pos = torch.zeros((self.num_envs, 3), device=self.device)
         self._episode_sums = {
-            "lin_vel":          torch.zeros(self.num_envs, device=d),
-            "ang_vel":          torch.zeros(self.num_envs, device=d),
-            "distance_to_goal": torch.zeros(self.num_envs, device=d),
+            "lin_vel":          torch.zeros(self.num_envs, device=self.device),
+            "ang_vel":          torch.zeros(self.num_envs, device=self.device),
+            "distance_to_goal": torch.zeros(self.num_envs, device=self.device),
         }
         
-        self._randomize_goals(torch.arange(self.num_envs, device=d))
+        self._randomize_goals(torch.arange(self.num_envs, device=self.device))
 
-    # ── PegasusEnv interface ──────────────────────────────────
+
+
+    #############################################
+    #           PegasusEnv interface
+    #############################################
 
     def _pre_physics_step(self, actions: torch.Tensor):
-        """Clamp to [-1, 1] — same as Isaac Lab."""
+        """
+        Clamp actions between [-1, 1].
+        """
+
         self._actions = actions.clamp(-1.0, 1.0)
 
     def _apply_action(self):
         """
-        Convert [-1,1] actions to forces/torques.
-        Matches Isaac Lab _pre_physics_step + _apply_action:
-
-            thrust = thrust_to_weight * robot_weight * (action[0]+1)/2
-            moment = moment_scale * action[1:]
+        Convert clamped actions to forces/torques.
+        thrust = thrust_to_weight * robot_weight * (action[0]+1)/2
+        moment = moment_scale * action[1:]
         """
-        n  = self.num_envs
-        p  = self.parts_per_vehicle
-        d  = self.device
 
-        forces  = torch.zeros((n, p, 3), device=d)
-        torques = torch.zeros((n, p, 3), device=d)
+        forces  = torch.zeros((self.num_envs, self.parts_per_vehicle, 3), device=self.device)
+        torques = torch.zeros((self.num_envs, self.parts_per_vehicle, 3), device=self.device)
 
         robot_weight = self.cfg.drone_mass * self.cfg.gravity
         thrust = self.cfg.thrust_to_weight * robot_weight * (self._actions[:, 0] + 1.0) / 2.0
@@ -134,22 +131,25 @@ class QuadcopterEnv(PegasusEnv):
 
         self.backend.set_forces_and_torques(forces, torques)
 
+
     def _get_observations(self) -> dict:
         """
-        Builds the 13-dim observation vector matching Isaac Lab:
-            rel_pos (3) — goal position relative to robot, world frame
-            quat    (4) — attitude wxyz
-            vel     (3) — linear velocity, world frame
-            omega   (3) — angular velocity, body frame
+        Method that builds a 12-dimensional observation vector for the policy.
 
-        Note: Isaac Lab uses body-frame lin/ang vel and projected gravity.
-        Here we use world-frame lin vel and body-frame ang vel which are
-        equivalent for a hover task where the policy learns from relative pos.
-        For exact replication use _to_body_frame() helpers below.
+        The observation is composed of:
+            lin_vel_b (3) — linear velocity in the body frame
+            ang_vel_b (3) — angular velocity in the body frame
+            projected_gravity_b (3) — gravity vector projected into the body frame
+            desired_pos_b (3) — goal position relative to the robot, expressed in the body frame
+
+        Returns:
+            dict: A dictionary containing the observation tensor under the key "policy".
         """
+
         state = self.backend.get_state()     # [N, 13]
+
         pos = state[:, 0:3]
-        quat = state[:, 6:10]      # wxyz
+        quat = state[:, 6:10]   
         lin_vel_b = state[:, 3:6]
         ang_vel_b = state[:, 10:13]
 
@@ -163,12 +163,21 @@ class QuadcopterEnv(PegasusEnv):
         projected_gravity_b = quaternion_apply(quaternion_invert(quat), g_w)
 
         obs = torch.cat([lin_vel_b, ang_vel_b, projected_gravity_b, desired_pos_b], dim=-1)  # [N, 12]
+
         return {"policy": obs}
+
 
     def _get_rewards(self) -> torch.Tensor:
         """
-        Reward matching Isaac Lab QuadcopterEnv._get_rewards() exactly.
-        All terms are multiplied by step_dt (= sim_dt * decimation).
+        This method computes the reward signal for the current timestep.
+
+        The reward is composed of multiple terms:
+            lin_vel (1) — squared linear velocity penalty
+            ang_vel (1) — squared angular velocity penalty
+            distance_to_goal (1) — shaped reward based on distance to the goal
+
+        Returns:
+            torch.Tensor: The total reward for each environment instance.
         """
         state = self.backend.get_state()
 
@@ -193,16 +202,22 @@ class QuadcopterEnv(PegasusEnv):
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         """
-        Matches Isaac Lab QuadcopterEnv._get_dones() exactly:
+        Method that determines whether each environment instance has terminated
+        or been truncated at the current timestep.
 
-            terminated: z < 0.1 OR z > 2.0
-            truncated:  episode_length_buf >= max_episode_length - 1
+        Termination occurs when the robot's height (z position in world frame)
+        goes outside the valid range (z < 0.1 or z > 2.0)
 
-        IMPORTANT: episode_length_buf is already incremented in base_env.step()
-        BEFORE this method is called — same as Isaac Lab.
+        Truncation occurs when the maximum episode length is reached:
+            truncated — episode_length_buf >= max_episode_length - 1
 
-        terminated → rsl_rl does NOT bootstrap (V = 0)
-        truncated  → rsl_rl DOES bootstrap    (V = V(s_last))
+        The episode length buffer is assumed to have been incremented before
+        this method is called by the step function.
+
+        Returns:
+            tuple[torch.Tensor, torch.Tensor]:
+                - terminated: Boolean tensor indicating terminal states
+                - truncated: Boolean tensor indicating time-limit truncation
         """
 
         state = self.backend.get_state()     # [N, 13]
@@ -212,7 +227,25 @@ class QuadcopterEnv(PegasusEnv):
 
         return terminated, truncated
 
+
     def _reset_idx(self, env_ids: torch.Tensor):
+        """
+        Method that resets a subset of environment instances and updates
+        episode-level logging statistics.
+
+        It then restores the initial robot state, including position and
+        orientation, resets the episode length buffer, clears previous actions,
+        and samples new goal positions.
+
+        If all environments are reset, the episode length buffer is randomized
+        to decorrelate environment rollouts.
+
+        Finally, any registered reset callbacks are executed.
+
+        Args:
+            env_ids (torch.Tensor): Indices of environments to reset.
+        """
+
         if env_ids.numel() == 0:
             return
 
@@ -259,6 +292,21 @@ class QuadcopterEnv(PegasusEnv):
     # helper
 
     def _randomize_goals(self, env_ids: torch.Tensor):
+        """
+        Method that samples new goal positions for the specified environments.
+
+        The goal position is randomized as follows:
+            - XY coordinates are sampled uniformly within a configured range
+            and offset by the environment's initial position
+            - Z coordinate is sampled independently within a configured range
+
+        This ensures that goals are distributed around each environment's
+        starting position.
+
+        Args:
+            env_ids (torch.Tensor): Indices of environments to update.
+        """
+
         xy_low, xy_high = self.cfg.goal_pos_xy_range
         z_low, z_high = self.cfg.goal_pos_z_range
 
