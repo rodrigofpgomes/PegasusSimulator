@@ -93,6 +93,7 @@ class PegasusEnv(ABC):
     def parts_per_vehicle(self) -> int:
         return self.backend.parts_per_vehicle
 
+
     # ── public API ────────────────────────────────────────────
 
     def step(self, actions: torch.Tensor):
@@ -135,6 +136,7 @@ class PegasusEnv(ABC):
 
         return obs, reward, terminated, truncated, self.extras
 
+
     def reset(self):
         """
         Reset all environments.
@@ -144,10 +146,12 @@ class PegasusEnv(ABC):
             episode_length_buf = randint(0, max_episode_length)
         We replicate this with init_at_random_ep_len in rsl_rl runner.
         """
+
         ids = torch.arange(self.num_envs, device=self.device)
         self._reset_idx(ids)
         obs, _ = self._get_observations(), self.extras
         return obs, self.extras
+
 
     def register_reset_callback(self, fn):
         self._reset_callbacks.append(fn)

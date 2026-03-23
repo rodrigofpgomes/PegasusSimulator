@@ -1,63 +1,50 @@
 """
 | File: ppo.py
-| Description: PPO training using rsl_rl OnPolicyRunner (rsl_rl 2.x).
-| License: BSD-3-Clause.
-
-rsl_rl 2.x learn() reads these keys directly from cfg root:
-    cfg["num_steps_per_env"]   ← RolloutStorage
-    cfg["save_interval"]       ← checkpoint saving
-    cfg["check_for_nan"]       ← optional, defaults True
+| Description: PPO training via rsl_rl 2.x OnPolicyRunner.
+|
+| actor_class — fully configurable via agent_cfg.actor_class
+| seed        — reproducibility via agent_cfg.seed
 """
 import os
 import datetime
 
+from rsl_rl.runners import OnPolicyRunner
+from rsl_rl.models import MLPModel
+from rsl_rl.modules.distribution import GaussianDistribution
+from .wrappers.rsl_rl_wrapper import RslRlVecEnvWrapper
+
 
 def train(env, agent_cfg, log_dir: str, device: str):
-    try:
-        from rsl_rl.runners import OnPolicyRunner
-        from rsl_rl.models import MLPModel
-        from rsl_rl.modules.distribution import GaussianDistribution
-    except ImportError:
-        raise ImportError("rsl_rl not installed. Install with: pip install rsl-rl")
 
-    from .wrappers.rsl_rl_wrapper import RslRlVecEnvWrapper
+    # ── seed ─────────────────────────────────────────────────
+    _set_seed(getattr(agent_cfg, "seed", None))
 
-    wrapped_env = RslRlVecEnvWrapper(
-        env,
-        clip_obs     = agent_cfg.clip_obs,
-        clip_actions = agent_cfg.clip_actions,
-    )
+    # ── actor class ──────────────────────────────────────────
+    actor_class  = getattr(agent_cfg, "actor_class",  None) or MLPModel
+    actor_kwargs = getattr(agent_cfg, "actor_kwargs", None) or {}
 
-    train_cfg_dict = {
-        # ── top-level: read directly by construct_algorithm and learn() ──
+    actor_cfg = {
+        "class_name":  actor_class,
+        "hidden_dims": agent_cfg.actor_hidden_dims,
+        "activation":  agent_cfg.activation,
+        "distribution_cfg": {
+            "class_name": GaussianDistribution,
+            "init_std":   agent_cfg.init_noise_std,
+        },
+        **actor_kwargs,
+    }
+
+    # ── rsl_rl config ─────────────────────────────────────────
+    train_cfg = {
         "num_steps_per_env": agent_cfg.num_steps_per_env,
         "save_interval":     agent_cfg.save_interval,
-
-        # ── observation routing ───────────────────────────────────────────
-        "obs_groups": {
-            "actor":  ["policy"],
-            "critic": ["policy"],
-        },
-
-        # ── actor: stochastic MLPModel ────────────────────────────────────
-        "actor": {
-            "class_name":  MLPModel,
-            "hidden_dims": agent_cfg.actor_hidden_dims,
-            "activation":  agent_cfg.activation,
-            "distribution_cfg": {
-                "class_name": GaussianDistribution,   # pass class — not string
-                "init_std":   agent_cfg.init_noise_std,
-            },
-        },
-
-        # ── critic: deterministic MLPModel ────────────────────────────────
+        "obs_groups": {"actor": ["policy"], "critic": ["policy"]},
+        "actor":  actor_cfg,
         "critic": {
             "class_name":  MLPModel,
             "hidden_dims": agent_cfg.critic_hidden_dims,
             "activation":  agent_cfg.activation,
         },
-
-        # ── algorithm ─────────────────────────────────────────────────────
         "algorithm": {
             "class_name":             "PPO",
             "clip_param":             agent_cfg.clip_param,
@@ -72,10 +59,8 @@ def train(env, agent_cfg, log_dir: str, device: str):
             "schedule":               agent_cfg.schedule,
             "use_clipped_value_loss": agent_cfg.use_clipped_value_loss,
             "value_loss_coef":        agent_cfg.value_loss_coef,
-            "rnd_cfg":                None,   # required by Logger — disables RND
+            "rnd_cfg":                None,
         },
-
-        # ── runner ────────────────────────────────────────────────────────
         "runner": {
             "algorithm_class_name":    "PPO",
             "num_steps_per_env":       agent_cfg.num_steps_per_env,
@@ -83,21 +68,27 @@ def train(env, agent_cfg, log_dir: str, device: str):
             "save_interval":           agent_cfg.save_interval,
             "empirical_normalization": False,
         },
-
-        # ── multi-GPU: required key, empty = disabled ─────────────────────
         "multi_gpu": {},
     }
 
-    timestamp   = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_name    = f"{agent_cfg.experiment_name}_{timestamp}"
-    run_log_dir = os.path.join(log_dir, run_name)
+    # ── log dir ───────────────────────────────────────────────
+    # log_dir is already <tasks_dir>/<task>/ — append logs/<timestamp> only
+    ts          = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    run_log_dir = os.path.join(log_dir, "logs", ts)
     os.makedirs(run_log_dir, exist_ok=True)
+    _save_config_log(run_log_dir, agent_cfg)
+    print(f"\n[PPO] Logs: {run_log_dir}\n")
 
-    _save_config_log(run_log_dir, "ppo", agent_cfg)
+    # ── train ─────────────────────────────────────────────────
+    wrapped = RslRlVecEnvWrapper(
+        env,
+        clip_obs     = agent_cfg.clip_obs,
+        clip_actions = agent_cfg.clip_actions,
+    )
 
     runner = OnPolicyRunner(
-        env       = wrapped_env,
-        train_cfg = train_cfg_dict,
+        env       = wrapped,
+        train_cfg = train_cfg,
         log_dir   = run_log_dir,
         device    = device,
     )
@@ -107,17 +98,32 @@ def train(env, agent_cfg, log_dir: str, device: str):
         init_at_random_ep_len   = True,
     )
 
-    print(f"\nTraining complete. Logs saved to: {run_log_dir}")
+    print(f"[PPO] Done. Logs: {run_log_dir}")
 
 
-def _save_config_log(log_dir: str, algo: str, cfg):
+def _set_seed(seed):
+    if seed is None:
+        return
+    import torch, random
+    import numpy as np
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark     = False
+    print(f"[PPO] Seed: {seed}")
+
+
+def _save_config_log(log_dir, cfg):
     import dataclasses
-    path = os.path.join(log_dir, "config.txt")
-    with open(path, "w") as f:
-        f.write(f"Algorithm: {algo.upper()}\n")
-        f.write("=" * 40 + "\n")
+    with open(os.path.join(log_dir, "config.txt"), "w") as f:
+        f.write("Algorithm: PPO\n" + "="*40 + "\n")
         if dataclasses.is_dataclass(cfg):
-            for field in dataclasses.fields(cfg):
-                f.write(f"{field.name}: {getattr(cfg, field.name)}\n")
+            for fld in dataclasses.fields(cfg):
+                val = getattr(cfg, fld.name)
+                if isinstance(val, type):
+                    val = val.__name__
+                f.write(f"{fld.name}: {val}\n")
         else:
             f.write(str(cfg))

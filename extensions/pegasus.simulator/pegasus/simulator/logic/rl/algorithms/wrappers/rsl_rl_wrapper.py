@@ -65,15 +65,12 @@ class RslRlVecEnvWrapper(VecEnv):
         self.device = self.unwrapped.device
         self.max_episode_length = self.unwrapped.max_episode_length
 
-        # compat com o teu código anterior
         self.num_obs = self.unwrapped.num_obs
         self.num_privileged_obs = None
         self.num_actions = self.unwrapped.num_actions
 
-        # proxy defensivo para cfg
         self._cfg_proxy = _EnvCfgProxy(getattr(self.unwrapped, "cfg", None))
 
-        # igual ao Isaac Lab: reset inicial
         self.env.reset()
 
     def __str__(self):
