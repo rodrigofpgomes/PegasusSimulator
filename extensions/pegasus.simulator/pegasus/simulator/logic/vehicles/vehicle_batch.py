@@ -170,6 +170,14 @@ class VehicleBatch():
 
         self._body_index = next((i for i, p in enumerate(self._vehicle_prims.prim_paths[:self._parts_per_vehicle]) if p.endswith("/body")), None)
 
+        # Root prim view — one prim per vehicle (the articulation root).
+        # Used by ResetManager to teleport vehicles without touching non-root
+        # articulation links, which PhysX does not allow to be set directly.
+        # Expression: "{stage_prefix}_*/body" matches quadrotor_0/body, quadrotor_1/body, ...
+        self._root_prims = RigidPrim(prim_paths_expr = f"{self._stage_prefix}_*/body", name = f"{self._stage_prefix}_roots")
+
+        self._root_prims.initialize()
+
         self._allocate_batch_state()
 
         #Initialize the backends
@@ -245,8 +253,8 @@ class VehicleBatch():
         # Retrieve the world poses of the spawned vehicles
         init_pos, init_orientation = vehicles.get_world_poses()
 
-        #init_pos[:, 2] = 0.3
-        #vehicles.set_world_poses(init_pos, init_orientation)
+        init_pos[:, 2] = 1.0
+        vehicles.set_world_poses(init_pos, init_orientation)
 
         # Store them as tensors for later use
         self._init_pos = torch.as_tensor(init_pos, dtype=torch.float32, device=self.device)

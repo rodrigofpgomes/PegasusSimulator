@@ -99,10 +99,7 @@ class MultirotorBatch(VehicleBatch):
         self._drag = config.drag
 
         self._input_mode = None
-        self._external_forces = None
-        self._external_torques = None
-        self._desired_rotor_velocities = None
-
+        
     
     def _cache_rotor_positions_body(self):
         """
@@ -293,7 +290,7 @@ class MultirotorBatch(VehicleBatch):
         ang_vel = torch.sqrt(squared_ang_vel)
 
         return ang_vel
-
+ 
     
     def set_input_mode(self, input_mode: str):
         self._input_mode = input_mode
