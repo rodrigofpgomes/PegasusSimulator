@@ -11,6 +11,10 @@ from pegasus.simulator.logic.backends.backend import Backend
 from pegasus.simulator.logic.state_batch import StateBatch
 from pegasus.simulator.logic.transforms import quaternion_to_matrix
 
+import isaacsim.core.utils.prims as prim_utils
+from omni.isaac.core.prims import XFormPrimView
+from pxr import UsdGeom, Gf
+
 
 class RLBackend(Backend):
     """
@@ -74,6 +78,10 @@ class RLBackend(Backend):
         # Attitude controller gains (rotor_velocity + inner_loop only)
         self._Kr = None
         self._Kw = None
+
+        self._goal_marker_view = None
+        self._goal_marker_paths = []
+
 
     # ── properties (readable before start()) ─────────────────
 
@@ -270,6 +278,93 @@ class RLBackend(Backend):
         Shape: [N, 13]  pos(3) + vel_world(3) + quat_wxyz(4) + omega_body(3)
         """
         return self._state_cache
+
+    def create_goal_markers(
+        self,
+        root_path: str = "/World/GoalMarkers",
+        size: float = 0.15,
+        color: tuple[float, float, float] = (0.29, 0.388, 0.878)
+    ):
+        """
+        Cria marcadores visuais (cubos) para os goals.
+
+        Args:
+            root_path: pasta/prim root onde os cubos vão ficar.
+            size: lado do cubo em metros.
+            color: RGB em [0, 1].
+        """
+
+        if self.vehicle is None:
+            raise RuntimeError("RLBackend.create_goal_markers() called before vehicle initialize().")
+
+        stage = self.vehicle._world.stage
+
+        # root xform
+        if not stage.GetPrimAtPath(root_path).IsValid():
+            prim_utils.create_prim(root_path, "Xform")
+
+        self._goal_marker_root = root_path
+        self._goal_marker_paths = []
+
+        n_markers = self._n_vehicles
+
+        for i in range(n_markers):
+            prim_path = f"{root_path}/goal_{i}"
+
+            if not stage.GetPrimAtPath(prim_path).IsValid():
+                prim_utils.create_prim(prim_path, "Cube", translation=[0.0, 0.0, -100.0], scale=[size, size, size])
+
+            cube = UsdGeom.Cube(stage.GetPrimAtPath(prim_path))
+            cube.CreateSizeAttr(1.0)
+            cube.GetDisplayColorAttr().Set([Gf.Vec3f(*color)])
+
+            self._goal_marker_paths.append(prim_path)
+
+        expr = f"{root_path}/goal_*"
+
+        self._goal_marker_view = XFormPrimView(prim_paths_expr=expr, name="goal_marker_view")
+
+
+    def update_goal_markers(self, positions: torch.Tensor, env_ids: torch.Tensor):
+        """
+        Atualiza a posição dos marcadores de goal.
+
+        Args:
+            positions:
+                - se houver um marcador por env: [N, 3]
+                - se houver só um marcador: [1, 3] ou [3]
+            env_ids:
+                índices dos envs a atualizar. Se None, atualiza todos.
+        """
+        if self._goal_marker_view is None:
+            return
+
+        if positions.ndim == 1:
+            positions = positions.unsqueeze(0)
+
+        positions = positions.to(device=self._device, dtype=torch.float32)
+
+        indices = env_ids.to(device=self._device, dtype=torch.long)
+
+        # orientação identidade em wxyz
+        orientations = torch.zeros((positions.shape[0], 4), device=self._device, dtype=torch.float32)
+        orientations[:, 0] = 1.0
+
+        self._goal_marker_view.set_world_poses(positions=positions, orientations=orientations, indices=indices)
+
+    def hide_goal_markers(self, env_ids: torch.Tensor):
+        if self._goal_marker_view is None:
+            return
+
+        indices = env_ids.to(device=self._device, dtype=torch.long)
+
+        positions = torch.zeros((indices.numel(), 3), device=self._device, dtype=torch.float32)
+        positions[:, 2] = -100.0
+
+        orientations = torch.zeros((indices.numel(), 4), device=self._device, dtype=torch.float32)
+        orientations[:, 0] = 1.0
+
+        self._goal_marker_view.set_world_poses(positions=positions, orientations=orientations, indices=indices)
 
     @staticmethod
     def vee_batch(S):

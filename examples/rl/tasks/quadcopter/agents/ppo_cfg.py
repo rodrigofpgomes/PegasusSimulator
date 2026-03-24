@@ -66,7 +66,7 @@ class PPOConfig:
     critic_obs_normalization: bool = False
 
     # training duration
-    max_iterations: int = 200
+    max_iterations: int = 2000
     save_interval: int = 50
 
 
