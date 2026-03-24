@@ -161,12 +161,17 @@ def main():
 
     # Simulator
     pg = PegasusInterface()
+    pg.set_world_settings(device=device)
     world_settings = dict(pg._world_settings)
-    world_settings["device"] = device
     pg._world = World(**world_settings)
     world = pg.world
 
     pg.load_environment(SIMULATION_ENVIRONMENTS["Curved Gridroom"])
+
+    #collision_paths = ["/World/Layout/GroundPlane"]
+    #world.scene.add_default_ground_plane(z_position=0.0)
+
+
 
     prim_utils.create_prim(
         "/World/Light/DomeLight",
@@ -186,7 +191,7 @@ def main():
         vehicle_batch_id=1,
         n_vehicles=n_envs,
         spacing=2.5,
-        config=vehicle_cfg,
+        config=vehicle_cfg
     )
 
     # Environment
@@ -212,12 +217,7 @@ def main():
     train_cfg_dict = build_runner_cfg(agent_cfg)
 
     # Build runner exactly like training
-    runner = OnPolicyRunner(
-        env=wrapped_env,
-        train_cfg=train_cfg_dict,
-        log_dir=None,
-        device=device,
-    )
+    runner = OnPolicyRunner(env=wrapped_env, train_cfg=train_cfg_dict, log_dir=None, device=device)
 
     print(f"\nLoading checkpoint: {args.checkpoint}")
     try:

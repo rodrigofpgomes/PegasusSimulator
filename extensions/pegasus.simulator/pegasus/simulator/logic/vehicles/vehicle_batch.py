@@ -58,8 +58,8 @@ class VehicleBatch():
         graphical_sensors=[],
         graphs=[],
         backends=[],
-        spacing: float = 3.0,
-):
+        spacing: float = 3.0
+    ):
         """
         Class that initializes a vehicle in the isaac sim's curent stage
 
@@ -186,7 +186,7 @@ class VehicleBatch():
 
 
 
-    def _spawn_batch(self, init_pos=None, init_orientation=None, spacing=3.0):
+    def _spawn_batch(self, init_pos=None, init_orientation=None, spacing=2.5):
         '''
         This method spawns a batch of vehicles in the simulation stage.
 
@@ -245,8 +245,11 @@ class VehicleBatch():
             target_paths = cloner.generate_paths(self._stage_prefix, self.n_vehicles)
 
             # Clone the base vehicle to the generated paths
-            cloner.clone(source_prim_path=f"{self._stage_prefix}_0", prim_paths=target_paths, replicate_physics=False, copy_from_source=True, base_env_path="/World", root_path=f"{self._stage_prefix}_")
+            cloner.clone(source_prim_path=f"{self._stage_prefix}_0", prim_paths=target_paths, replicate_physics=True, copy_from_source=True, base_env_path="/World", root_path=f"{self._stage_prefix}_", enable_env_ids=True)
 
+            # Filter collisions between vehicles
+            # cloner.filter_collisions(physicsscene_path="/physicsScene", collision_root_path="/World/collisions", prim_paths=target_paths, global_paths=collision_paths)
+            
         # Create a view over the root prim of each vehicle
         vehicles = XFormPrimView(prim_paths_expr=f"{self._stage_prefix}_.*/")
 

@@ -52,7 +52,7 @@ class QuadcopterEnvCfg(PegasusEnvCfg):
 
     # vehicle params
     thrust_to_weight: float = 1.9 #2.81
-    moment_scale:     float = 0.01 #0.1
+    moment_scale:     float = 0.06 #0.1
     drone_mass:       float = 1.5   # kg
     gravity:          float = 9.81    # m/s^2
 
@@ -98,6 +98,8 @@ class QuadcopterEnv(PegasusEnv):
             "distance_to_goal": torch.zeros(self.num_envs, device=self.device),
         }
         
+        self.backend.create_goal_markers(root_path="/World/GoalMarkers", size=0.15, color=(1.0, 0.0, 0.0))
+
         self._randomize_goals(torch.arange(self.num_envs, device=self.device))
 
 
@@ -314,3 +316,5 @@ class QuadcopterEnv(PegasusEnv):
         self._goal_pos[env_ids, :2] += self.reset_manager.init_pos[env_ids, :2]
 
         self._goal_pos[env_ids, 2] = torch.zeros_like(self._goal_pos[env_ids, 2]).uniform_(z_low, z_high)
+
+        self.backend.update_goal_markers(self._goal_pos[env_ids], env_ids=env_ids)
