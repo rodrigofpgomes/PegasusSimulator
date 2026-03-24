@@ -119,7 +119,7 @@ import isaacsim.core.utils.prims         as prim_utils
 import isaacsim.core.utils.stage         as stage_utils
 from pxr import PhysxSchema
 
-from pegasus.simulator.params                            import ROBOTS
+from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
 from pegasus.simulator.logic.vehicles.multirotor_batch  import MultirotorBatch, MultirotorBatchConfig
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.rl                          import RLBackend, ResetManager
@@ -206,10 +206,15 @@ def main():
 
     # ── simulator ─────────────────────────────────────────────
     pg = PegasusInterface()
-    world_settings           = dict(pg._world_settings)
-    world_settings["device"] = device
+    pg.set_world_settings(device=device)
+    world_settings = dict(pg._world_settings)
     pg._world = World(**world_settings)
-    world     = pg.world
+
+    world = pg.world
+
+    #world.scene.add_default_ground_plane(z_position=0.0)
+
+    pg.load_environment(SIMULATION_ENVIRONMENTS["Flat Plane"])
 
     prim_utils.create_prim(
         "/World/Light/DomeLight", "DomeLight",
