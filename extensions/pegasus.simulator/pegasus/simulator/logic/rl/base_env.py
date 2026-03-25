@@ -1,29 +1,34 @@
 """
 | File: base_env.py
-| Description: Base class for all RL environments in Pegasus (Isaac Lab style).
+| Description: Base class for RL environments in Pegasus.
+|              Gymnasium-compatible (for skrl) AND preserves Isaac Lab step ordering.
 | License: BSD-3-Clause.
 
-Terminated vs Truncated — critical distinction for correct GAE:
+Isaac Lab step ordering (preserved exactly):
+    1. _pre_physics_step(actions)
+    2. decimation × [_apply_action(), world.step()]
+    3. episode_length_buf += 1          ← BEFORE dones
+    4. _get_rewards()
+    5. _get_dones()
+    6. extras["time_outs"] = truncated  ← before reset
+    7. _reset_idx(reset_ids)            ← AFTER all outputs computed
+    8. _get_observations()              ← obs of NEW state (after reset)
 
-    terminated: agent reached a terminal state (crash, out of bounds).
-                No bootstrap — V(s_terminal) = 0.
-                rsl_rl: dones=True, time_outs=False
-
-    truncated:  episode ended by timeout (max_episode_length reached).
-                Bootstrap — V(s_last) != 0, episode continues hypothetically.
-                rsl_rl: dones=True, time_outs=True
-
-Isaac Lab implementation (DirectRLEnv):
-    - episode_length_buf is incremented BEFORE computing dones
-    - truncated = episode_length_buf >= max_episode_length - 1
-    - reset happens AFTER dones are computed and returned
-    - infos["time_outs"] = truncated  ← rsl_rl uses this for GAE bootstrap
-
-This file replicates that behaviour exactly.
+Note on obs ordering vs Isaac Lab:
+    Isaac Lab returns obs of the state BEFORE reset (last obs of episode).
+    skrl's wrap_env expects the standard Gymnasium contract where obs is
+    returned AFTER the environment has handled resets internally.
+    This version follows the Gymnasium contract (obs after reset).
+    The difference only affects the very last transition of each episode
+    and is standard practice with vectorised Gymnasium environments.
 """
 from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
+
+import gymnasium as gym
+from gymnasium import spaces
+import numpy as np
 import torch
 
 __all__ = ["PegasusEnv", "PegasusEnvCfg"]
@@ -33,31 +38,27 @@ __all__ = ["PegasusEnv", "PegasusEnvCfg"]
 class PegasusEnvCfg:
     observation_space: int   = 0
     action_space:      int   = 0
-    state_space:       int   = 0    # asymmetric critic (optional)
+    state_space:       int   = 0
     episode_length_s:  float = 10.0
-    decimation:        int   = 2    # physics steps per policy step
+    decimation:        int   = 2
     sim_dt:            float = 0.01
 
 
-class PegasusEnv(ABC):
+class PegasusEnv(gym.Env, ABC):
     """
-    Base class for all RL environments in Pegasus.
-    Replicates Isaac Lab's DirectRLEnv interface exactly.
-
-    Key design points matching Isaac Lab:
-    1. episode_length_buf is incremented BEFORE _get_dones()
-    2. truncated = episode_length_buf >= max_episode_length - 1
-    3. _reset_idx() is called AFTER obs/reward/dones are computed
-    4. infos["time_outs"] = truncated for rsl_rl GAE bootstrap
-    5. reset() returns obs from AFTER the physical reset (initial state)
+    Base vectorised RL environment for Pegasus.
+    Implements the Gymnasium interface required by skrl's wrap_env(),
+    while preserving Isaac Lab's internal step ordering.
     """
 
     def __init__(self, cfg: PegasusEnvCfg, backend, reset_manager):
+        super().__init__()
         self.cfg           = cfg
         self.backend       = backend
         self.reset_manager = reset_manager
 
         self.num_envs    = backend.n_vehicles
+        # num_obs / num_actions kept for rsl_rl wrapper compatibility
         self.num_obs     = cfg.observation_space
         self.num_actions = cfg.action_space
 
@@ -65,50 +66,46 @@ class PegasusEnv(ABC):
         self.max_episode_length_s = cfg.episode_length_s
         self.step_dt              = cfg.sim_dt * cfg.decimation
 
-        self.extras: dict  = {}
+        # Gymnasium spaces — required by skrl wrap_env()
+        self.observation_space = spaces.Box(
+            low=-np.inf, high=np.inf,
+            shape=(cfg.observation_space,), dtype=np.float32,
+        )
+        self.action_space = spaces.Box(
+            low=-1.0, high=1.0,
+            shape=(cfg.action_space,), dtype=np.float32,
+        )
+
+        self.extras: dict         = {}
         self._reset_callbacks: list = []
 
         # Allocated in setup() — device not available before start()
         self.episode_length_buf = None
-
-        # Expose termination flags for logging
-        self.reset_terminated = None
-        self.reset_time_outs  = None
+        self.reset_terminated   = None
+        self.reset_time_outs    = None
 
     def setup(self):
-        """
-        Called by the train script after timeline.play() + world.step(),
-        when device and parts_per_vehicle are available via backend.
-        """
+        """Called after timeline.play() + world.step() — device available here."""
         d = self.device
-        self.episode_length_buf = torch.zeros(self.num_envs, dtype=torch.long, device=d)
-        self.reset_terminated   = torch.zeros(self.num_envs, dtype=torch.bool, device=d)
-        self.reset_time_outs    = torch.zeros(self.num_envs, dtype=torch.bool, device=d)
+        self.episode_length_buf = torch.zeros(self.num_envs, dtype=torch.long,  device=d)
+        self.reset_terminated   = torch.zeros(self.num_envs, dtype=torch.bool,  device=d)
+        self.reset_time_outs    = torch.zeros(self.num_envs, dtype=torch.bool,  device=d)
 
     @property
     def device(self) -> str:
+        """Read device from backend at runtime — safe before and after start()."""
         return self.backend.device
 
     @property
     def parts_per_vehicle(self) -> int:
         return self.backend.parts_per_vehicle
 
-
-    # ── public API ────────────────────────────────────────────
+    # ── Gymnasium API ─────────────────────────────────────────────────
 
     def step(self, actions: torch.Tensor):
         """
-        Advance by one policy step (decimation physics steps).
-
-        Isaac Lab ordering (replicated exactly):
-            1. _pre_physics_step(actions)
-            2. decimation × [_apply_action(), world.step()]
-            3. episode_length_buf += 1          ← BEFORE dones
-            4. _get_observations()
-            5. _get_rewards()
-            6. _get_dones()                     ← uses updated buf
-            7. populate extras["time_outs"]     ← before reset
-            8. _reset_idx(reset_ids)            ← AFTER all outputs
+        Isaac Lab ordering — Gymnasium return format.
+        Returns: obs, reward, terminated, truncated, info
         """
         self._pre_physics_step(actions)
 
@@ -116,47 +113,45 @@ class PegasusEnv(ABC):
             self._apply_action()
             self._world_step()
 
+        # Increment BEFORE computing dones — matches Isaac Lab
         self.episode_length_buf += 1
 
-        reward = self._get_rewards()
+        reward                = self._get_rewards()
         terminated, truncated = self._get_dones()
 
-        # Store for logging and external access
         self.reset_terminated = terminated
-        self.reset_time_outs = truncated
-
+        self.reset_time_outs  = truncated
         self.extras["time_outs"] = truncated
-        
-        # Reset only after all outputs are computed
+
+        # Reset AFTER computing outputs
         reset_ids = (terminated | truncated).nonzero(as_tuple=False).squeeze(-1)
         if reset_ids.numel() > 0:
             self._reset_idx(reset_ids)
 
+        # Obs of the new state (after reset for done envs — Gymnasium contract)
         obs = self._get_observations()
 
         return obs, reward, terminated, truncated, self.extras
 
-
-    def reset(self):
+    def reset(self, *, seed=None, options=None):
         """
-        Reset all environments.
-        Returns obs from the initial state (after physical reset).
-
-        Isaac Lab spreads resets to avoid spikes:
-            episode_length_buf = randint(0, max_episode_length)
-        We replicate this with init_at_random_ep_len in rsl_rl runner.
+        Gymnasium-compatible reset.
+        Returns: (obs, info)
         """
+        super().reset(seed=seed)
+        if seed is not None:
+            torch.manual_seed(seed)
+            np.random.seed(seed)
 
         ids = torch.arange(self.num_envs, device=self.device)
         self._reset_idx(ids)
-        obs, _ = self._get_observations(), self.extras
+        obs = self._get_observations()
         return obs, self.extras
-
 
     def register_reset_callback(self, fn):
         self._reset_callbacks.append(fn)
 
-    # ── internal ──────────────────────────────────────────────
+    # ── Internal ──────────────────────────────────────────────────────
 
     def _world_step(self):
         if hasattr(self, "_world"):
@@ -166,7 +161,7 @@ class PegasusEnv(ABC):
         for fn in self._reset_callbacks:
             fn(env_ids)
 
-    # ── mandatory task interface ──────────────────────────────
+    # ── Abstract task interface ───────────────────────────────────────
 
     @abstractmethod
     def _pre_physics_step(self, actions: torch.Tensor): ...
@@ -175,30 +170,15 @@ class PegasusEnv(ABC):
     def _apply_action(self): ...
 
     @abstractmethod
-    def _get_observations(self) -> dict: ...
+    def _get_observations(self) -> torch.Tensor:
+        """Return flat Tensor [N, obs_dim] — required by skrl wrap_env."""
+        ...
 
     @abstractmethod
     def _get_rewards(self) -> torch.Tensor: ...
 
     @abstractmethod
-    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """
-        Returns (terminated, truncated).
-
-        terminated: True when a fatal condition occurs (crash, OOB).
-                    rsl_rl will NOT bootstrap these — V(s) = 0.
-
-        truncated:  True when episode_length_buf >= max_episode_length - 1.
-                    rsl_rl WILL bootstrap these — V(s) != 0.
-                    Use self.episode_length_buf for this check.
-        """
-        ...
+    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]: ...
 
     @abstractmethod
-    def _reset_idx(self, env_ids: torch.Tensor):
-        """
-        Reset selected environments.
-        Called AFTER obs/reward/dones are computed and returned.
-        Must reset episode_length_buf[env_ids] = 0.
-        """
-        ...
+    def _reset_idx(self, env_ids: torch.Tensor): ...

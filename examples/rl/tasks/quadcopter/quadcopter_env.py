@@ -112,6 +112,10 @@ class QuadcopterEnv(PegasusEnv):
         """
         Clamp actions between [-1, 1].
         """
+        if not isinstance(actions, torch.Tensor):
+            actions = torch.as_tensor(actions, device=self.device, dtype=torch.float32)
+        else:
+            actions = actions.to(self.device, dtype=torch.float32)
 
         self._actions = actions.clamp(-1.0, 1.0)
 
@@ -145,8 +149,8 @@ class QuadcopterEnv(PegasusEnv):
             desired_pos_b (3) — goal position relative to the robot, expressed in the body frame
 
         Returns:
-            dict: A dictionary containing the observation tensor under the key "policy".
-        """
+            torch.Tensor: The observation tensor.  
+            """
 
         state = self.backend.get_state()     # [N, 13]
 
@@ -166,7 +170,7 @@ class QuadcopterEnv(PegasusEnv):
 
         obs = torch.cat([lin_vel_b, ang_vel_b, projected_gravity_b, desired_pos_b], dim=-1)  # [N, 12]
 
-        return {"policy": obs}
+        return obs
 
 
     def _get_rewards(self) -> torch.Tensor:
