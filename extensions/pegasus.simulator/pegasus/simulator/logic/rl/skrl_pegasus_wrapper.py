@@ -1,38 +1,116 @@
+"""
+| File: skrl_pegasus_wrapper.py
+| Description: Isaac-Lab-style environment wrapper for skrl compatibility.
+| License: BSD-3-Clause.
+"""
+
+from __future__ import annotations
+from typing import Any
 import torch
 
+from skrl import config
+from skrl.utils.spaces.torch import flatten_tensorized_space, tensorize_space, unflatten_tensorized_space
+
 class PegasusSkrlWrapper:
-    def __init__(self, env):
+    """Wraps Pegasus Environments to comply with skrl's structural expectations."""
+
+    def __init__(self, env: Any) -> None:
+        """Initializes the wrapper for the Pegasus environment."""
         self._env = env
+        self._unwrapped = getattr(env, "unwrapped", env)
+
         self.num_envs = env.num_envs
+        self.num_agents = 1
         self.device = env.device
-        self.observation_space = env.observation_space
-        self.action_space = env.action_space
+
+        self._reset_once = True
+        self._observations = None
+        self._states = None
+        self._info = {}
+
+    # -------------------------------------------
+    # Properties
+    # -------------------------------------------
+
+    @property
+    def observation_space(self):
+        """Returns the policy's observation space."""
+        try:
+            return self._unwrapped.single_observation_space["policy"]
+        except Exception:
+            return self._unwrapped.observation_space
+
+    @property
+    def action_space(self):
+        """Returns the environment's action space."""
+        try:
+            return self._unwrapped.single_action_space
+        except Exception:
+            return self._unwrapped.action_space
+
+    @property
+    def state_space(self):
+        """Returns the critic's state space, if available."""
+        try:
+            return self._unwrapped.single_observation_space["critic"]
+        except Exception:
+            return getattr(self._unwrapped, "state_space", None)
+
+    @property
+    def unwrapped(self):
+        """Returns the underlying base environment."""
+        return self._unwrapped
+
+    # -------------------------------------------
+    # Core RL Interface
+    # -------------------------------------------
+
+    def step(self, actions: torch.Tensor):
+        """Executes an action, advances the simulation, and formats the output."""
+        actions = unflatten_tensorized_space(self.action_space, actions)
+
+        with torch.no_grad():
+            observations, reward, terminated, truncated, self._info = self._env.step(actions)
+
+        self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations["policy"]))
+
+        states = observations.get("critic", None)
+        self._states = flatten_tensorized_space(tensorize_space(self.state_space, states)) if states is not None and self.state_space is not None else None
+
+        return self._observations, reward.view(-1, 1), terminated.view(-1, 1), truncated.view(-1, 1), self._info
 
     def reset(self):
-        obs, info = self._env.reset()
-        obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
-        return obs, info
+        """Fetches the initial environment observation safely."""
+        if self._reset_once:
+            observations, self._info = self._env.reset()
+            self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations["policy"]))
 
-    def step(self, actions):
-        actions = torch.as_tensor(actions, device=self.device, dtype=torch.float32)
-        obs, reward, terminated, truncated, info = self._env.step(actions)
+            states = observations.get("critic", None)
+            self._states = flatten_tensorized_space(tensorize_space(self.state_space, states)) if states is not None and self.state_space is not None else None
 
-        obs = torch.as_tensor(obs, device=self.device, dtype=torch.float32)
-        reward = torch.as_tensor(reward, device=self.device, dtype=torch.float32).view(self.num_envs, -1)
-        terminated = torch.as_tensor(terminated, device=self.device, dtype=torch.bool).view(self.num_envs, -1)
-        truncated = torch.as_tensor(truncated, device=self.device, dtype=torch.bool).view(self.num_envs, -1)
+            self._reset_once = False
 
-        return obs, reward, terminated, truncated, info
+        return self._observations, self._info
+
+    def state(self):
+        """Returns the current state (critic observation) of the environment."""
+        return self._states
+
+    # -------------------------------------------
+    # Utilities & Lifecycle
+    # -------------------------------------------
 
     def render(self, *args, **kwargs):
+        """Renders the environment if supported."""
         if hasattr(self._env, "render"):
             return self._env.render(*args, **kwargs)
         return None
 
     def close(self):
+        """Closes the environment and releases resources."""
         if hasattr(self._env, "close"):
             return self._env.close()
 
-    @property
-    def unwrapped(self):
-        return self._env
+    def __getattr__(self, name):
+        """Delegates missing attribute access to the underlying environment."""
+        return getattr(self._env, name)
