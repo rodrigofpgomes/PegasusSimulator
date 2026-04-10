@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 """
-| File: nonlinear_controller.py
-| Author: Marcelo Jacinto and Joao Pinto (marcelo.jacinto@tecnico.ulisboa.pt, joao.s.pinto@tecnico.ulisboa.pt)
+| File: nonlinear_controller_batch.py
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
 | Description: This files serves as an example on how to use the control backends API to create a custom controller 
 for the vehicle from scratch and use it to perform a simulation, without using PX4 nor ROS. In this controller, we
@@ -17,13 +16,12 @@ import carb
 from pegasus.simulator.logic.state_batch import StateBatch as State
 from pegasus.simulator.logic.backends import Backend
 
-# Auxiliary scipy and numpy modules
+# Auxiliary torch, numpy and transform modules
 import numpy as np
 import torch
 
 from typing import Sequence
 
-#from scipy.spatial.transform import Rotation
 from pegasus.simulator.logic.transforms import quaternion_to_matrix
 
 
