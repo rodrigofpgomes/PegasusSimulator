@@ -1,10 +1,7 @@
 """
 Quadcopter Task
 
-Structure:
-- quadcopter_env.py: Environment
-- ppo_cfg.py: PPO config
-- sac_cfg.py: SAC config
+quadcopter_env.py: Environment implementation for a quadcopter hover task adapted from Isaac Lab.
 """
 
 from .quadcopter_env import QuadcopterEnv, QuadcopterEnvCfg
