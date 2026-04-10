@@ -3,15 +3,12 @@
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
 | Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2024, Marcelo Jacinto. All rights reserved.
-| Description: Defines the VehicleBatch class, adapted to support batched simulation of multiple vehicles.
+| Description: Definition of the VehicleBatch class, adapted to support batched simulation of multiple vehicles.
 """
 import torch
 
-import math
-
 # Low level APIs
-import carb
-from pxr import Usd, UsdGeom, Gf
+from pxr import UsdGeom, Gf
 
 # High level Isaac sim APIs
 import omni.usd
@@ -34,7 +31,7 @@ from isaacsim.core.simulation_manager import SimulationManager, IsaacEvents
 
 class VehicleBatch():
     """
-    Base class for handling multiple vehicles in batch.
+    Base class for handling batched simulation of multiple vehicles.
     """
     def __init__(
         self,
@@ -68,36 +65,36 @@ class VehicleBatch():
         # Define the same device that is running the simulation
         self._device = PegasusInterface()._world_settings["device"]
 
-        # Get the current world at which we want to spawn the vehicle
+        # Get the current world in which the batched vehicles will be spawned
         self._world = PegasusInterface().world
         self._stage = self._world.stage
             
-        # Save the name with which the vehicle will appear in the stage
-        # and the name of the .usd file that contains its description
+        # Save the base stage prefix for the batch and the USD file that defines the vehicle model
         self._stage_prefix = get_stage_next_free_path(self._stage, stage_prefix, False)
         self._usd_file = usd_path
         self._n_vehicles = n_vehicles
 
         self._vehicle_name = self._stage_prefix.rpartition("/")[-1]
 
-        # Spawn the batch of vehicle's in the world's stage
+        # Spawn the batch of vehicles in the world stage
         self._spawn_batch(init_pos, init_orientation, spacing)
 
         self._parts_per_vehicle = None
         
         self._body_index = None
 
-        # View batch prims
+        # Create a batched view over all rigid prims belonging to the vehicles
         self._vehicle_expr = f"{self._stage_prefix}.*/.*"
         self._vehicle_prims = RigidPrim(prim_paths_expr=self._vehicle_expr, name=f"{self._stage_prefix}_prims")
 
-        # Variable that will hold the current state of the vehicle
+        # Variable that stores the current batched state of the vehicles
         self._state = StateBatch(self.n_vehicles, self.device)
 
-        # Register callback executed before each physics step. This method should be implemented in classes that inherit the vehicle object.
+        # Register callback executed before each physics step. 
+        # This method should be implemented in classes that inherit the vehicle object.
         self._cb_pre = SimulationManager.register_callback(self.update, event=IsaacEvents.PRE_PHYSICS_STEP, order=0)
 
-        # Register callback executed after each physics step to update the current batch state of the system
+        # Register the callback executed after each physics step to update the batched vehicle state
         self._cb_post = SimulationManager.register_callback(self.update_state, event=IsaacEvents.POST_PHYSICS_STEP, order=0)
 
         # Set the flag that signals if the simulation is running or not
@@ -177,7 +174,7 @@ class VehicleBatch():
 
 
     def _spawn_batch(self, init_pos=None, init_orientation=None, spacing=2.5):
-        '''
+        """
         This method spawns a batch of vehicles in the simulation stage.
 
         If explicit initial positions are provided, each vehicle is spawned individually at the specified position and orientation.
@@ -185,7 +182,7 @@ class VehicleBatch():
 
         Args:
             spacing (float): Distance between vehicles when using the grid spawn mode.
-        '''
+        """
 
         # If explicit initial positions were provided, spawn each vehicle manually
         if init_pos is not None:
@@ -256,6 +253,9 @@ class VehicleBatch():
 
 
     def _allocate_batch_state(self):
+        """
+        Allocate and initialize the batched state tensors for all vehicles.
+        """
         n = self.n_vehicles
         zeros3 = torch.zeros((n, 3), dtype=torch.float32, device=self.device)
         zeros4 = torch.zeros((n, 4), dtype=torch.float32, device=self.device)
@@ -278,7 +278,7 @@ class VehicleBatch():
         SimulationManager.deregister_callback(self._cb_pre)
         SimulationManager.deregister_callback(self._cb_post)
 
-        # Remove this object from the vehicleHandler
+        # Remove this batch object from the VehicleManager
         VehicleManager.get_vehicle_manager().remove_vehicle(self._stage_prefix)
 
     """
@@ -305,18 +305,22 @@ class VehicleBatch():
 
     @property
     def n_vehicles(self):
+        """Number of vehicles in the batch."""
         return self._n_vehicles
 
     @property
     def parts_per_vehicle(self):
+        """Number of parts per vehicle in the batch."""
         return self._parts_per_vehicle
 
     @property
     def device(self):
+        """The device on which the state tensors are allocated."""
         return self._device
 
     @property
     def body_index(self):
+        """The index of the body prim for each vehicle in the batch."""
         return self._body_index
 
     """

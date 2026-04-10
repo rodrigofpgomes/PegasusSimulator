@@ -3,7 +3,7 @@
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
 | Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2024, Marcelo Jacinto. All rights reserved.
-| Description: Defines the MultirotorBatch class, which serves as the base class for batches of multirotor vehicles.
+| Description: Definition of the MultirotorBatch class, which serves as the base class for batched multirotor vehicles.
 """
 import torch
 
@@ -17,6 +17,8 @@ from pegasus.simulator.logic.backends.px4_mavlink_backend import PX4MavlinkBacke
 from pegasus.simulator.logic.dynamics import LinearDragBatch
 from omni.isaac.core.utils.torch.rotations import quat_rotate_inverse
 from pegasus.simulator.logic.thrusters import QuadraticThrustCurveBatch
+
+# Default sensors can be enabled here if batch sensor support is required.
 #from pegasus.simulator.logic.sensors import Barometer, IMU, Magnetometer, GPS
 
 # Extension APIs
@@ -25,7 +27,7 @@ from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 
 class MultirotorBatchConfig:
     """
-    A data class that is used for configuring a Multirotor
+    Class used to configure a MultirotorBatch vehicle.
     """
 
     def __init__(self, n_vehicles=1):
@@ -35,37 +37,34 @@ class MultirotorBatchConfig:
         # Define the same device that is running the simulation
         device = PegasusInterface()._world_settings["device"]
 
-        # Stage prefix of the vehicle when spawning in the world
+        # Stage prefix used when spawning the batched vehicles in the world
         self.stage_prefix = "quadrotor"
 
-        # The USD file that describes the visual aspect of the vehicle (and some properties such as mass and moments of inertia)
+        # The USD file that describes the visual appearance of the vehicle, as well as properties such as mass and inertia
         self.usd_file = ""
 
-        # The default thrust curve for a quadrotor and dynamics relating to drag
+        # Default thrust curve and drag model for the batched quadrotors
         self.thrust_curve = QuadraticThrustCurveBatch(n_vehicles=n_vehicles, device = device)
         self.drag = LinearDragBatch(n_vehicles=n_vehicles, drag_coefficients=[0.50, 0.30, 0.0])
 
-        # The default sensors for a quadrotor
+        # Default onboard sensors for the batched quadrotors.
+        # These are currently disabled until batch sensor support is enabled.
         #self.sensors = [Barometer(device=device), IMU(device=device), Magnetometer(device=device), GPS(device=device)]
         self.sensors = []
 
-        # The default graphical sensors for a quadrotor
+        # Default graphical sensors for the batched quadrotors
         self.graphical_sensors = []
 
-        # The default omnigraphs for a quadrotor
+        # Default OmniGraph graphs for the batched quadrotors
         self.graphs = []
 
-        # The backends for actually sending commands to the vehicle. By default use mavlink (with default mavlink configurations)
-        # [Can be None as well, if we do not desired to use PX4 with this simulated vehicle]. It can also be a ROS2 backend
-        # or your own custom Backend implementation!
-        #self.backends = [PX4MavlinkBackend(config=PX4MavlinkBackendConfig())]
+        # Backends used to send commands to the batched vehicles.
+        # This can be a PX4, ROS 2, or custom backend implementation, or an empty list if no backend is required.
         self.backends = []
 
 
 class MultirotorBatch(VehicleBatch):
-    """
-    Base class for batched multirotor vehicles.
-    """
+    """MultirotorBatch class - It defines a base interface for batched multirotor vehicles."""
     def __init__(
         self,
         # Simulation specific configurations
@@ -79,11 +78,11 @@ class MultirotorBatch(VehicleBatch):
         spacing: float = 3.0,
         config=None,
     ):
-        """Initializes the multirotor object
+        """Initialize the batched multirotor object.
 
         Args:
-            stage_prefix (str): The name the vehicle will present in the simulator when spawned. Defaults to "quadrotor".
-            usd_file (str): The USD file that describes the looks and shape of the vehicle. Defaults to "".
+            stage_prefix (str): Base name used when spawning the batched vehicles in the simulator. Defaults to "quadrotor".
+            usd_file (str): USD file describing the vehicle appearance and physical properties. Defaults to "".
             vehicle_batch_id (int): The id to be used for the vehicle batch. Defaults to 0.
             init_pos (list): The initial position of the vehicle in the inertial frame (in ENU convention). Defaults to [0.0, 0.0, 0.07].
             init_orientation (list): The initial orientation of the vehicle in quaternion [qw, qx, qy, qz]. Defaults to [1.0, 0.0, 0.0, 0.0].
@@ -195,8 +194,10 @@ class MultirotorBatch(VehicleBatch):
 
     def update(self, dt: float):
         """
-        Method that computes and applies the forces to the vehicle in simulation based on the motor speed. 
-        This method must be implemented by a class that inherits this type. This callback
+        Compute and apply the batched forces and torques to the vehicles in simulation.
+
+        Depending on the selected input mode, the commands are interpreted either as
+        rotor angular velocities or as body-frame forces and torques. This callback
         is called on every physics step.
 
         Args:
@@ -211,14 +212,9 @@ class MultirotorBatch(VehicleBatch):
             backend._vehicle = self
             backend.update(dt)
 
-        # TODO:  Generate the rotating propeller visual effect
-        # self.handle_propeller_visual(i, forces_z[i], articulation)
+        # TODO: Add batched propeller visual updates for rotor animation.
 
-        # Get the articulation root of the vehicle -> rotating propeller visual effect
-        # articulation = ...
-
-
-        # Rotor angular velocities - self.input_mode == "rotor_velocity"
+        # Rotor angular velocity mode
         if self._input_mode == "rotor_velocity":
 
             if len(self._backends) != 0:
@@ -232,7 +228,7 @@ class MultirotorBatch(VehicleBatch):
             forces = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
             torques = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
 
-            # Get the desired forces to apply to the rotors vehicles and the desired rolling_moment
+            # Compute the rotor thrust forces and the desired rolling_moment
             forces_z, _, rolling_moment = self._thrusters.update(self._state, dt)
 
             # Apply the force in Z to each rotor in the rotor frame
@@ -245,22 +241,22 @@ class MultirotorBatch(VehicleBatch):
 
             # forces[:, 0, :] += drag
         
-        # Direct application of forces and torques - self.input_mode == "forces_torques"
+        # Direct body force and torque mode
         else:
             forces, torques = self._backends[0].get_forces_and_torques()
 
-            # optional: add drag
+            # Optional: add linear drag on the vehicle body.
             # drag = self._drag.update(self._state, dt)
             # forces[:, 0, :] += drag
 
 
-        # Apply the forces and torques to the vehicle in the simulator
+        # Apply the batched forces and torques in the simulator.
         self.apply_forces_and_torques_all_parts(forces, torques)
 
 
     def force_and_torques_to_velocities(self, force: torch.Tensor, torque: torch.Tensor):
         """
-        Auxiliar method used to get the target angular velocities for each rotor, given the total desired thrust [N] and
+        Auxiliary method used to get the target angular velocities for each rotor, given the total desired thrust [N] and
         torque [Nm] to be applied in the multirotor's body frame.
 
         Note: This method assumes a quadratic thrust curve. This method will be improved in a future update,
@@ -297,5 +293,11 @@ class MultirotorBatch(VehicleBatch):
  
     
     def set_input_mode(self, input_mode: str):
+        """
+        Set the control input mode used by the batched multirotor.
+
+        Args:
+            input_mode (str): Control input mode. Expected values are "rotor_velocity" or "forces_torques".
+        """
         self._input_mode = input_mode
 
