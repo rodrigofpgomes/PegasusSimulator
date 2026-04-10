@@ -1,101 +1,154 @@
 """
-play.py — Run a trained PPO policy via skrl.
+| File: agents/sac_cfg.py
+| Description: SAC config for skrl - Quadcopter task.
+|
+| NOTE: Hyperparameters are still preliminary and subject to tuning.
+|
+| Structure required by the training pipeline:
+|   PRESETS["<name>"] = {
+|       "models":    fn(obs_space, act_space, device) -> dict[str, nn.Module]
+|       "cfg":       skrl SAC_DEFAULT_CONFIG dict with overrides
+|       "timesteps": int - total training timesteps
+|       "seed":      int | None
+|   }
+|
+| Models:
+|   - Policy: Gaussian actor
+|   - Critics: twin Q-networks (critic_1, critic_2)
+|   - Target critics: for stability (Polyak averaging)
+|
+| To use a custom actor:
+|   Replace the Policy class or pass a different factory in "models".
+|   The Policy must implement skrl's Model interface:
+|       compute(inputs, role) -> (output, log_std, extras_dict)
 """
-import argparse
-import os
-import sys
-import numpy as np
 
-from isaacsim import SimulationApp
-
-def parse_args():
-    p = argparse.ArgumentParser()
-    p.add_argument("--checkpoint", required=True, help="Path to checkpoint .pt")
-    p.add_argument("--n_envs", type=int, default=4)
-    p.add_argument("--device", default="cuda:0")
-    p.add_argument("--headless", action="store_true")
-    return p.parse_args()
-
-args = parse_args()
-simulation_app = SimulationApp({"headless": args.headless})
-
+import copy
 import torch
-import omni.timeline
-from omni.isaac.core.world import World
-import isaacsim.core.utils.prims as prim_utils
+import torch.nn as nn
 
-from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
-from pegasus.simulator.logic.vehicles.multirotor_batch import MultirotorBatch, MultirotorBatchConfig
-from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
-from pegasus.simulator.logic.rl import RLBackend, ResetManager
+from skrl.models.torch import GaussianMixin, DeterministicMixin, Model
+from skrl.agents.torch.sac import SAC_DEFAULT_CONFIG
+from skrl.resources.preprocessors.torch import RunningStandardScaler
 
-from skrl.envs.loaders.torch import wrap_env
-from skrl.agents.torch.ppo import PPO
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+class Policy(GaussianMixin, Model):
+    def __init__(
+        self,
+        observation_space,
+        action_space,
+        device,
+        clip_actions=True,
+        clip_log_std=True,
+        min_log_std=-5,
+        max_log_std=2,
+        reduction="sum",
+    ):
+        Model.__init__(self, observation_space, action_space, device)
+        GaussianMixin.__init__(
+            self,
+            clip_actions=clip_actions,
+            clip_log_std=clip_log_std,
+            min_log_std=min_log_std,
+            max_log_std=max_log_std,
+            reduction=reduction,
+        )
 
-def main():
-    from tasks.quadcopter.quadcopter_env import QuadcopterEnv, QuadcopterEnvCfg
-    from tasks.quadcopter.agents.ppo_cfg import PRESETS, Policy, Value
-    
-    device = args.device
-    n_envs = args.n_envs
-    env_cfg = QuadcopterEnvCfg()
-    agent_cfg = PRESETS["isaac_lab"]
+        self.net = nn.Sequential(
+            nn.Linear(self.num_observations, 128), nn.ELU(),
+            nn.Linear(128, 128),                   nn.ELU(),
+            nn.Linear(128, self.num_actions),
+        )
+        self.log_std_parameter = nn.Parameter(torch.zeros(self.num_actions))
 
-    # -- Sim Setup --
-    pg = PegasusInterface()
-    pg.set_world_settings(device=device)
-    pg._world = World(**dict(pg._world_settings))
-    world = pg.world
+    def compute(self, inputs, role):
+        return self.net(inputs["states"]), self.log_std_parameter, {}
 
-    pg.load_environment(SIMULATION_ENVIRONMENTS["Curved Gridroom"])
-    prim_utils.create_prim("/World/Light/DomeLight", "DomeLight", position=np.array([1.0, 1.0, 1.0]))
 
-    backend = RLBackend(n_vehicles=n_envs, action_mode="direct_force")
-    vehicle_cfg = MultirotorBatchConfig(n_vehicles=n_envs)
-    vehicle_cfg.backends = [backend]
+class Critic(DeterministicMixin, Model):
+    def __init__(self, observation_space, action_space, device, clip_actions=False):
+        Model.__init__(self, observation_space, action_space, device)
+        DeterministicMixin.__init__(self, clip_actions=clip_actions)
 
-    MultirotorBatch(stage_prefix="/World/quadrotor", usd_file=ROBOTS["Iris"], vehicle_batch_id=1, n_vehicles=n_envs, spacing=2.5, config=vehicle_cfg)
+        self.net = nn.Sequential(
+            nn.Linear(self.num_observations + self.num_actions, 128), nn.ELU(),
+            nn.Linear(128, 128),                                       nn.ELU(),
+            nn.Linear(128, 1),
+        )
 
-    env = QuadcopterEnv(env_cfg, backend, reset_manager=None)
-    env._world = world
+    def compute(self, inputs, role):
+        x = torch.cat([inputs["states"], inputs["taken_actions"]], dim=1)
+        return self.net(x), {}
 
-    world.reset()
-    timeline = omni.timeline.get_timeline_interface()
-    timeline.play()
-    world.step(render=False)
 
-    env.reset_manager = ResetManager(vehicle=backend._vehicle, device=device)
-    env.setup()
+def _default_models(obs_space, act_space, device):
+    critic_1 = Critic(obs_space, act_space, device)
+    critic_2 = Critic(obs_space, act_space, device)
 
-    # -- SKRL Wrap & Load --
-    wrapped_env = wrap_env(env, wrapper="omniverse-isaacgym")
+    target_critic_1 = Critic(obs_space, act_space, device)
+    target_critic_2 = Critic(obs_space, act_space, device)
 
-    models = {
-        "policy": Policy(wrapped_env.observation_space, wrapped_env.action_space, device),
-        "value": Value(wrapped_env.observation_space, wrapped_env.action_space, device)
+    target_critic_1.load_state_dict(critic_1.state_dict())
+    target_critic_2.load_state_dict(critic_2.state_dict())
+
+    return {
+        "policy": Policy(obs_space, act_space, device),
+        "critic_1": critic_1,
+        "critic_2": critic_2,
+        "target_critic_1": target_critic_1,
+        "target_critic_2": target_critic_2,
     }
 
-    # Instanciar o Agente apenas para carregar os pesos
-    agent = PPO(models=models, memory=None, cfg=agent_cfg, observation_space=wrapped_env.observation_space, action_space=wrapped_env.action_space, device=device)
-    
-    print(f"\nLoading checkpoint: {args.checkpoint}")
-    agent.load(args.checkpoint)
 
-    obs, _ = wrapped_env.reset()
+def _make_cfg() -> dict:
+    cfg = copy.deepcopy(SAC_DEFAULT_CONFIG)
 
-    print("\nRunning inference. Close the window to stop.\n")
-    while simulation_app.is_running():
-        with torch.no_grad():
-            # act() retorna (actions, log_prob, dict)
-            actions, _, _ = agent.act(obs, timestep=0, timesteps=0)
-            
-        obs, rewards, terminated, truncated, info = wrapped_env.step(actions)
-        world.step(render=not args.headless)
+    cfg["gradient_steps"] = 1
+    cfg["batch_size"] = 512
+    cfg["discount_factor"] = 0.99
+    cfg["polyak"] = 0.005
 
-    timeline.stop()
-    simulation_app.close()
+    cfg["actor_learning_rate"] = 3e-4
+    cfg["critic_learning_rate"] = 3e-4
+    cfg["entropy_learning_rate"] = 3e-4
 
-if __name__ == "__main__":
-    main()
+    cfg["learning_rate_scheduler"] = None
+    cfg["learning_rate_scheduler_kwargs"] = {}
+
+    cfg["state_preprocessor"] = RunningStandardScaler
+    cfg["state_preprocessor_kwargs"] = {"size": None}
+
+    cfg["random_timesteps"] = 8
+    cfg["learning_starts"] = 8
+
+    cfg["grad_norm_clip"] = 1.0
+
+    cfg["learn_entropy"] = True
+    cfg["initial_entropy_value"] = 0.2
+    cfg["target_entropy"] = None
+
+    cfg["rewards_shaper"] = None
+    cfg["mixed_precision"] = False
+
+    cfg["experiment"] = {
+        "directory": "",
+        "experiment_name": "",
+        "write_interval": 1000,
+        "checkpoint_interval": 5000,
+        "store_separately": False,
+        "wandb": False,
+        "wandb_kwargs": {},
+    }
+
+    return cfg
+
+
+PRESETS = {
+    "isaac_lab": {
+        "models": _default_models,
+        "cfg": _make_cfg(),
+        "timesteps": 300_000,
+        "memory_size": 256,
+        "seed": 42,
+    }
+}
