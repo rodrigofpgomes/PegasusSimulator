@@ -5,7 +5,7 @@
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
 """
 import torch
-from pegasus.simulator.logic.state import State
+from pegasus.simulator.logic.state_batch import StateBatch as State
 from pegasus.simulator.logic.thrusters.thrust_curve import ThrustCurve
 
 class QuadraticThrustCurveBatch(ThrustCurve):

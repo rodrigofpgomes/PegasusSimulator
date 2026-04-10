@@ -1,7 +1,8 @@
 """
 | File: skrl_pegasus_wrapper.py
+| Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
+| License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
 | Description: Environment wrapper for skrl compatibility.
-| License: BSD-3-Clause.
 """
 
 from __future__ import annotations
