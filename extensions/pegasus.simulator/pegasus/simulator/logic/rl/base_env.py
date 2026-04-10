@@ -109,7 +109,7 @@ class PegasusEnv(ABC):
         self.reset_time_outs = truncated
         self.extras["time_outs"] = truncated.view(self.num_envs, 1)
 
-        # Handle resets gracefully
+        # Reset environments that have terminated or reached timeout
         reset_ids = (terminated | truncated).nonzero(as_tuple=False).squeeze(-1)
         if reset_ids.numel() > 0:
             self._reset_idx(reset_ids)
@@ -148,12 +148,12 @@ class PegasusEnv(ABC):
     @abstractmethod
     def _pre_physics_step(self, actions: torch.Tensor):
         """Processes the actions (e.g., clamping) before applying them to the physics engine."""
-        pass
+        pass    
 
     @abstractmethod
     def _apply_action(self):
-        """Applies the processed actions as forces/torques in the simulator."""
-        pass
+        """Sets the processed actions as forces and torques applied to the simulator."""
+    pass
 
     @abstractmethod
     def _get_observations(self) -> dict:
