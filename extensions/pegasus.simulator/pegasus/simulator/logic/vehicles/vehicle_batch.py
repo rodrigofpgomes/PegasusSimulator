@@ -170,9 +170,8 @@ class VehicleBatch():
 
         self._body_index = next((i for i, p in enumerate(self._vehicle_prims.prim_paths[:self._parts_per_vehicle]) if p.endswith("/body")), None)
 
-        # Root prim view — one prim per vehicle (the articulation root).
-        # Used by ResetManager to teleport vehicles without touching non-root
-        # articulation links, which PhysX does not allow to be set directly.
+        # Root prim view - one prim per vehicle (the articulation root).
+        # Used by ResetManager to teleport vehicles without touching non-root articulation links, which PhysX does not allow to be set directly.
         # Expression: "{stage_prefix}_*/body" matches quadrotor_0/body, quadrotor_1/body, ...
         self._root_prims = RigidPrim(prim_paths_expr = f"{self._stage_prefix}_*/body", name = f"{self._stage_prefix}_roots")
 
@@ -247,21 +246,20 @@ class VehicleBatch():
             # Clone the base vehicle to the generated paths
             cloner.clone(source_prim_path=f"{self._stage_prefix}_0", prim_paths=target_paths, replicate_physics=True, copy_from_source=True, base_env_path="/World", root_path=f"{self._stage_prefix}_", enable_env_ids=True)
 
-            # Filter collisions between vehicles
-            # cloner.filter_collisions(physicsscene_path="/physicsScene", collision_root_path="/World/collisions", prim_paths=target_paths, global_paths=collision_paths)
-            
         # Create a view over the root prim of each vehicle
         vehicles = XFormPrimView(prim_paths_expr=f"{self._stage_prefix}_.*/")
 
         # Retrieve the world poses of the spawned vehicles
-        init_pos, init_orientation = vehicles.get_world_poses()
+        set_init_pos, set_init_orientation = vehicles.get_world_poses()
 
-        init_pos[:, 2] = 1.0
-        vehicles.set_world_poses(init_pos, init_orientation)
+        if init_pos is None:
+            set_init_pos[:, 2] = 1.0
+
+        vehicles.set_world_poses(set_init_pos, set_init_orientation)
 
         # Store them as tensors for later use
-        self._init_pos = torch.as_tensor(init_pos, dtype=torch.float32, device=self.device)
-        self._init_orientation = torch.as_tensor(init_orientation, dtype=torch.float32, device=self.device)
+        self._init_pos = torch.as_tensor(set_init_pos, dtype=torch.float32, device=self.device)
+        self._init_orientation = torch.as_tensor(set_init_orientation, dtype=torch.float32, device=self.device)
 
         #print(f"Initialized {self.n_vehicles} vehicles at positions: {self.init_pos} and orientations: {self.init_orientation}")
 
