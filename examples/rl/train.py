@@ -11,6 +11,7 @@ Usage:
 
 import os
 import sys
+import copy
 import argparse
 import importlib
 import carb
@@ -28,12 +29,19 @@ def discover_tasks():
 
 def discover_algos():
     """Finds available algorithms dynamically."""
-    try:
-        import pegasus.simulator.logic.rl.algorithms as pkg
-        d = os.path.dirname(pkg.__file__)
-        return sorted(f[:-3] for f in os.listdir(d) if f.endswith(".py") and not f.startswith("_"))
-    except Exception:
+    repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
+    algo_dir = os.path.join(repo_root, "extensions", "pegasus.simulator", "pegasus", "simulator", "logic", "rl", "algorithms")
+    if not os.path.isdir(algo_dir):
         return ["ppo"]
+
+    algos = []
+    for f in os.listdir(algo_dir):
+        if not f.endswith(".py") or f.startswith("_"):
+            continue
+        algos.append(f[:-3])
+
+    return sorted(algos) or ["ppo"]
+
 
 def parse_args():
     """Parses command line arguments for training."""
@@ -44,7 +52,7 @@ def parse_args():
     p.add_argument("--algo",    default="ppo", choices=algos)
     p.add_argument("--preset",  default="isaac_lab")
     p.add_argument("--n_envs",  type=int,   default=4096)
-    p.add_argument("--seed",    type=int,   default=None)
+    p.add_argument("--seed",    type=int,   default=42)
     p.add_argument("--headless", action="store_true")
     p.add_argument("--device",  default="cuda:0")
     return p.parse_args()
@@ -72,10 +80,30 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def load_env(task: str):
-    """Loads the target environment and configuration."""
-    mod = importlib.import_module(f"tasks.{task}.{task}_env")
-    cls_name = "".join(w.capitalize() for w in task.split("_")) + "Env"
+    """Loads the target environment and configuration dynamically from *_env.py."""
+
+    task_dir = os.path.join(TASKS_DIR, task)
+
+    # Find *_env.py file
+    env_files = [f for f in os.listdir(task_dir) if f.endswith("_env.py")]
+
+    env_file = env_files[0]
+    module_name = env_file[:-3]  # remove .py
+
+    # Import dynamically
+    mod = importlib.import_module(f"tasks.{task}.{module_name}")
+
+    # Infer class name (CamelCase + Env)
+    base_name = module_name.replace("_env", "")
+    cls_name = "".join(w.capitalize() for w in base_name.split("_")) + "Env"
+
+    if not hasattr(mod, cls_name):
+        raise AttributeError(f"Class '{cls_name}' not found in {module_name}")
+    if not hasattr(mod, cls_name + "Cfg"):
+        raise AttributeError(f"Config class '{cls_name}Cfg' not found in {module_name}")
+
     return getattr(mod, cls_name), getattr(mod, cls_name + "Cfg")()
+
 
 def load_agent_cfg(task: str, algo: str, preset: str) -> dict:
     """Loads the agent configuration for the given preset."""
@@ -90,12 +118,11 @@ def load_train_fn(algo: str):
 
 def main():
     EnvClass, env_cfg = load_env(args.task)
-    agent_cfg = load_agent_cfg(args.task, args.algo, args.preset)
+    agent_cfg = copy.deepcopy(load_agent_cfg(args.task, args.algo, args.preset))
     train_fn = load_train_fn(args.algo)
 
     # Apply CLI overrides
     if args.seed is not None:
-        agent_cfg = dict(agent_cfg)
         agent_cfg["seed"] = args.seed
 
     device = args.device
@@ -123,10 +150,11 @@ def main():
     pg._world = World(**dict(pg._world_settings))
     world = pg.world
 
-    # Increase GPU Found Lost Aggregate Pairs Capacity
-    stage = stage_utils.get_current_stage()
-    api = PhysxSchema.PhysxSceneAPI.Apply(stage.GetPrimAtPath("/physicsScene"))
-    api.CreateGpuFoundLostAggregatePairsCapacityAttr().Set(24576)
+    if "cuda" in device:
+        # Increase GPU Found Lost Aggregate Pairs Capacity
+        stage = stage_utils.get_current_stage()
+        api = PhysxSchema.PhysxSceneAPI.Apply(stage.GetPrimAtPath("/physicsScene"))
+        api.CreateGpuFoundLostAggregatePairsCapacityAttr().Set(24576)
 
     # Setup Vehicles
     backend = RLBackend(n_vehicles=n_envs, action_mode="direct_force")

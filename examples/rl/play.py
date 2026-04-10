@@ -55,15 +55,36 @@ from pegasus.simulator.logic.rl import RLBackend, ResetManager
 
 from skrl.envs.wrappers.torch import wrap_env
 from skrl.agents.torch.ppo import PPO
+from skrl.agents.torch.sac import SAC
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 def load_env(task):
-    """Dynamically loads the environment class and configuration."""
-    mod = importlib.import_module(f"tasks.{task}.{task}_env")
-    cls_name = "".join(w.capitalize() for w in task.split("_")) + "Env"
+    """Loads the target environment and configuration dynamically from *_env.py."""
+
+    task_dir = os.path.join(TASKS_DIR, task)
+
+    # Find *_env.py file
+    env_files = [f for f in os.listdir(task_dir) if f.endswith("_env.py")]
+
+    env_file = env_files[0]
+    module_name = env_file[:-3]  # remove .py
+
+    # Import dynamically
+    mod = importlib.import_module(f"tasks.{task}.{module_name}")
+
+    # Infer class name (CamelCase + Env)
+    base_name = module_name.replace("_env", "")
+    cls_name = "".join(w.capitalize() for w in base_name.split("_")) + "Env"
+
+    if not hasattr(mod, cls_name):
+        raise AttributeError(f"Class '{cls_name}' not found in {module_name}")
+    if not hasattr(mod, cls_name + "Cfg"):
+        raise AttributeError(f"Config class '{cls_name}Cfg' not found in {module_name}")
+
     return getattr(mod, cls_name), getattr(mod, cls_name + "Cfg")()
+
 
 def load_agent_cfg(task, algo, preset):
     """Loads the agent configuration preset."""
@@ -101,9 +122,9 @@ def main():
     pg._world = World(**dict(pg._world_settings))
     world = pg.world
 
-    # Load environment and lighting
+    # Load environment and lighting with a curved gridroom. Can be replaced with a flat plane using SIMULATION_ENVIRONMENTS["Flat Plane"].
     pg.load_environment(SIMULATION_ENVIRONMENTS["Curved Gridroom"])
-    #pg.load_environment(SIMULATION_ENVIRONMENTS["Flat Plane"])
+
     prim_utils.create_prim(
         "/World/Light/DomeLight", "DomeLight",
         position=np.array([1.0, 1.0, 1.0]),
@@ -141,6 +162,9 @@ def main():
     cfg = _prepare_cfg(agent_cfg["cfg"], device)
     models = agent_cfg["models"](wrapped.observation_space, wrapped.action_space, device)
 
+    # Update preprocessor sizes based on the wrapped environment's observation space
+    cfg["state_preprocessor_kwargs"]["size"] = wrapped.observation_space
+    
     # Initialize Agent
     agent = AgentClass(
         models=models, memory=None, cfg=cfg,
