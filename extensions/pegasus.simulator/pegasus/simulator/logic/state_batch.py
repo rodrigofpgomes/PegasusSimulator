@@ -1,8 +1,9 @@
 """
-| File: state.py
+| File: state_batch.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
-| Description: Describes the state of a vehicle (or rigidbody).
+| Description: Defines the StateBatch class, adapted to represent the state of multiple vehicles in batch form.
 """
 __all__ = ["StateBatch"]
 

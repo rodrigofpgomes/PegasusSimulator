@@ -1,7 +1,8 @@
 """
 | File: reset_manager.py
+| Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
+| License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
 | Description: Safe reset of rigid bodies in Isaac Sim using the RigidPrim API.
-| License: BSD-3-Clause.
 """
 
 import torch

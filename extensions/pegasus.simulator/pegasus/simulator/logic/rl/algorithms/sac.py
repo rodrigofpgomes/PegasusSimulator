@@ -1,7 +1,8 @@
 """
 | File: algorithms/sac.py
+| Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
+| License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
 | Description: SAC training via skrl - generic and task-agnostic.
-| License: BSD-3-Clause.
 """
 
 import os

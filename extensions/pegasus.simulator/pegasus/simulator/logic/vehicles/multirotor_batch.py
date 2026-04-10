@@ -1,8 +1,9 @@
 """
-| File: multirotor.py
+| File: multirotor_batch.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2024, Marcelo Jacinto. All rights reserved.
-| Description: Definition of the Multirotor class which is used as the base for all the multirotor vehicles.
+| Description: Defines the MultirotorBatch class, which serves as the base class for batches of multirotor vehicles.
 """
 import torch
 
@@ -29,7 +30,7 @@ class MultirotorBatchConfig:
 
     def __init__(self, n_vehicles=1):
         """
-        Initialization of the MultirotorConfig class
+        Initialize the MultirotorBatch configuration.
         """
         # Define the same device that is running the simulation
         device = PegasusInterface()._world_settings["device"]
@@ -62,7 +63,8 @@ class MultirotorBatchConfig:
 
 
 class MultirotorBatch(VehicleBatch):
-    """Multirotor class - It defines a base interface for creating a multirotor
+    """
+    Base class for batched multirotor vehicles.
     """
     def __init__(
         self,
@@ -85,13 +87,13 @@ class MultirotorBatch(VehicleBatch):
             vehicle_batch_id (int): The id to be used for the vehicle batch. Defaults to 0.
             init_pos (list): The initial position of the vehicle in the inertial frame (in ENU convention). Defaults to [0.0, 0.0, 0.07].
             init_orientation (list): The initial orientation of the vehicle in quaternion [qw, qx, qy, qz]. Defaults to [1.0, 0.0, 0.0, 0.0].
-            config (MultirotorConfig, optional): Defaults to MultirotorConfig().
+            config (MultirotorBatchConfig, optional): Defaults to MultirotorBatchConfig().
         """
 
         if config is None:
             config = MultirotorBatchConfig(n_vehicles=n_vehicles)
 
-        # 1. Initiate the Vehicle object itself
+        # 1. Initialize the VehicleBatch base class
         super().__init__(stage_prefix, usd_file, n_vehicles, init_pos, init_orientation, config.sensors, config.graphical_sensors, config.graphs, config.backends, spacing)
 
         # 2. Setup the dynamics of the system - get the thrust curve of the vehicle from the configuration
@@ -186,7 +188,9 @@ class MultirotorBatch(VehicleBatch):
         self._cache_allocation_matrix()
 
     def stop(self):
-        """In this case we do not need to do anything extra when the simulation stops"""
+        """
+        No extra actions are required when the simulation stops.
+        """
         pass
 
     def update(self, dt: float):

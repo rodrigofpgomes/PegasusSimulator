@@ -1,8 +1,9 @@
 """
-| File: vehicle.py
+| File: vehicle_batch.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2024, Marcelo Jacinto. All rights reserved.
-| Description: Definition of the Vehicle class which is used as the base for all the vehicles.
+| Description: Defines the VehicleBatch class, adapted to support batched simulation of multiple vehicles.
 """
 import torch
 
@@ -16,7 +17,6 @@ from pxr import Usd, UsdGeom, Gf
 import omni.usd
 from omni.usd import get_stage_next_free_path
 import isaacsim.core.utils.stage as stage_utils
-#from omni.isaac.dynamic_control import _dynamic_control
 from isaacsim.core.prims import RigidPrim
 
 from omni.isaac.cloner import GridCloner
@@ -34,18 +34,7 @@ from isaacsim.core.simulation_manager import SimulationManager, IsaacEvents
 
 class VehicleBatch():
     """
-    Batch wrapper for multiple vehicles spawned from the same USD asset.
-
-    This class:
-    - spawns N vehicles with paths <stage_prefix>0, <stage_prefix>1, ...
-    - creates batched RigidPrim views over the spawned rigid bodies
-    - stores batched state tensors with shape (N, ...)
-    - applies forces and torques to all matched rigid bodies in a single call
-
-    Conventions:
-    - stage_prefix must be a base prefix, e.g. "/World/quadrotor"
-    - spawned vehicle prims become "/World/quadrotor_0", "/World/quadrotor_1", ...
-    - state tensors use shape (n_vehicles, dim)
+    Base class for handling multiple vehicles in batch.
     """
     def __init__(
         self,
@@ -61,14 +50,20 @@ class VehicleBatch():
         spacing: float = 3.0
     ):
         """
-        Class that initializes a vehicle in the isaac sim's curent stage
+        Initialize a batch of vehicles in the current Isaac Sim stage.
 
         Args:
-            stage_prefix (str): The name the vehicle will present in the simulator when spawned. Defaults to "quadrotor".
-            usd_path (str): The USD file that describes the looks and shape of the vehicle. Defaults to "".
-            init_pos (list): The initial position of the vehicle in the inertial frame (in ENU convention). Defaults to [0.0, 0.0, 0.0].
-            init_orientation (list): The initial orientation of the vehicle in quaternion [qx, qy, qz, qw]. Defaults to [0.0, 0.0, 0.0, 1.0].
-        """
+            stage_prefix (str): Base path used when spawning the vehicle instances.
+            usd_path (str): Path to the USD file that defines the vehicle model.
+            n_vehicles (int): Number of vehicles to spawn in the batch.
+            init_pos (list, optional): Initial positions of the vehicles in the inertial frame using the ENU convention. If None, vehicles are spawned using a grid layout.
+            init_orientation (list, optional): Initial vehicle orientations as quaternions in the format [qw, qx, qy, qz].
+            sensors (list, optional): List of physics-based sensors attached to the vehicles.
+            graphical_sensors (list, optional): List of graphical sensors attached to the vehicles.
+            graphs (list, optional): List of graphs associated with the vehicles.
+            backends (list, optional): List of communication or control backends.
+            spacing (float): Distance between vehicles when using automatic grid spawning.
+        """        
 
         # Define the same device that is running the simulation
         self._device = PegasusInterface()._world_settings["device"]
@@ -99,14 +94,10 @@ class VehicleBatch():
         # Variable that will hold the current state of the vehicle
         self._state = StateBatch(self.n_vehicles, self.device)
 
-        # Add the update method to the physics callback if the world was received
-        # so that we can apply forces and torques to the vehicle. Note, this method should 
-        # be implemented in classes that inherit the vehicle object
-        #self._world.add_physics_callback(self._stage_prefix + "/update", self.update)
+        # Register callback executed before each physics step. This method should be implemented in classes that inherit the vehicle object.
         self._cb_pre = SimulationManager.register_callback(self.update, event=IsaacEvents.PRE_PHYSICS_STEP, order=0)
 
-        # Add a callback to the physics engine to update the current state of the system
-        #self._world.add_physics_callback(self._stage_prefix + "/state", self.update_state)
+        # Register callback executed after each physics step to update the current batch state of the system
         self._cb_post = SimulationManager.register_callback(self.update_state, event=IsaacEvents.POST_PHYSICS_STEP, order=0)
 
         # Set the flag that signals if the simulation is running or not
@@ -160,7 +151,7 @@ class VehicleBatch():
 
     def initialize(self):
         """
-        This method initialize the vehicle prim handles and allocate batched state tensors.
+        Initialize the vehicle prim handles and allocate batched state tensors.
         """
         self._vehicle_prims.initialize()
 
@@ -279,8 +270,9 @@ class VehicleBatch():
 
     def __del__(self):
         """
-        Method that is invoked when a vehicle object gets destroyed. When this happens, we also invoke the 
-        'remove_vehicle' from the VehicleManager in order to remove the vehicle from the list of active vehicles.
+        Method called when the vehicle batch object is destroyed.
+
+        When this happens, the batch is also removed from the VehicleManager.
         """
 
         SimulationManager.deregister_callback(self._cb_pre)
@@ -295,19 +287,19 @@ class VehicleBatch():
 
     @property
     def state(self):
-        """The state of the vehicle.
+        """The batched state of the vehicles.
 
         Returns:
-            State: The current state of the vehicle, i.e., position, orientation, linear and angular velocities...
+            StateBatch: The current state of all vehicles in the batch.
         """
         return self._state
     
     @property
     def vehicle_name(self) -> str:
-        """Vehicle name.
+        """Vehicle batch name.
 
         Returns:
-            Vehicle name (str): last prim name in vehicle prim path
+            str: The last component of the vehicle batch prim path.
         """
         return self._stage_prefix.rpartition("/")[-1]
 
@@ -333,7 +325,7 @@ class VehicleBatch():
 
     def sim_start_stop(self, event):
         """
-        Callback that is called every time there is a timeline event such as starting/stoping the simulation.
+        Callback called whenever a timeline event occurs, such as starting or stopping the simulation.
 
         Args:
             event: A timeline event generated from Isaac Sim, such as starting or stoping the simulation.
@@ -352,7 +344,7 @@ class VehicleBatch():
             # Invoke the start method of the vehicle (if it exists)
             self.start()
 
-            # Intializes the communication with all the backends. This method is invoked automatically when the simulation starts
+            # Intializes communication with all backends. This method is invoked automatically when the simulation starts
             for backend in self._backends:
                 backend.start()
 
@@ -370,7 +362,7 @@ class VehicleBatch():
             #for graphical_sensor in self._graphical_sensors:
             #    graphical_sensor.stop()
 
-            # Signal all the backends that the simulation has stoped. This method is invoked automatically when the simulation stops
+            # Signal all backends that the simulation has stopped. This method is invoked automatically when the simulation stops
             for backend in self._backends:
                 backend.stop()
 
@@ -387,7 +379,7 @@ class VehicleBatch():
 
         Notes:
             - Forces/torques are applied in the local body frame when is_global=False.
-            - The mapping between tensor rows and prim paths follows self.prims.prim_paths order.
+            - The mapping between tensor rows and prim paths follows self._vehicle_prims.prim_paths order.
         """
 
         forces = forces.reshape((self._vehicle_prims.count, 3))
@@ -416,12 +408,9 @@ class VehicleBatch():
 
     def update_state(self, dt: float):
         """
-        Method that is called at every physics step to retrieve and update the current state of the vehicle, i.e., get
-        the current position, orientation, linear and angular velocities and acceleration of the vehicle.
-        The state is defined with respect to the vehicle body prim.
+        Callback called at every physics step to retrieve and update the current batched vehicle state.
 
-        Args:
-            dt (float): The time elapsed between the previous and current function calls (s).
+        The state of each vehicle is defined with respect to its body prim.
         """
         
         if self._sim_running == False:
@@ -493,9 +482,8 @@ class VehicleBatch():
 
     def update(self, dt: float):
         """
-        Method that computes and applies the forces to the vehicle in
-        simulation based on the motor speed. This method must be implemented
-        by a class that inherits this type and it's called periodically by the physics engine.
+        Method that computes and applies the forces to the vehicle insimulation. 
+        This method must be implemented by a class that inherits this type and it's called periodically by the physics engine.
 
         Args:
             dt (float): The time elapsed between the previous and current function calls (s).

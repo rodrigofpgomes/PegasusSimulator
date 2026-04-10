@@ -1,7 +1,8 @@
 """
 | File: rl_backend.py
+| Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
+| License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
 | Description: Backend used to interface the multirotor simulator with vectorized RL environments.
-| License: BSD-3-Clause.
 """
 
 __all__ = ["RLBackend"]

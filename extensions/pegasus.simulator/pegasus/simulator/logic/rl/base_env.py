@@ -1,7 +1,8 @@
 """
 | File: base_env.py
-| Description: Base class for all RL environments in Pegasus (Isaac Lab style contract).
-| License: BSD-3-Clause.
+| Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
+| License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
+| Description: Base class for all RL environments in Pegasus.
 """
 
 from __future__ import annotations
