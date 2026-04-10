@@ -1,16 +1,16 @@
 """
 | File: quadcopter_env.py
-| Description: Quadcopter hover task — exact Isaac Lab replica.
+| Description: Quadcopter hover task (adapted from Isaac Lab).
 | License: BSD-3-Clause.
 
 Observation space (12):
-    lin_vel_b           (3) — linear velocity in the body frame
-    ang_vel_b           (3) — angular velocity in the body frame
-    projected_gravity_b (3) — gravity vector projected into the body frame
-    desired_pos_b       (3) — goal position relative to the robot in the body frame
+    lin_vel_b           (3) - linear velocity in the body frame
+    ang_vel_b           (3) - angular velocity in the body frame
+    projected_gravity_b (3) - gravity vector projected into the body frame
+    desired_pos_b       (3) - goal position relative to the robot in the body frame
 
 Action space (4):
-    action[0]  → collective thrust, scaled from [-1,1]
+    action[0]  → collective thrust, scaled by thrust_to_weight
     action[1:] → body-frame torques, scaled by moment_scale
 
 Termination:
@@ -75,7 +75,6 @@ class QuadcopterEnv(PegasusEnv):
         self._goal_pos = None
         self._episode_sums = {}
         self._body_index = 0
-        self._robot_weight = None
 
     def setup(self):
         """Initializes environment buffers and tracks variables after timeline starts."""
@@ -87,14 +86,12 @@ class QuadcopterEnv(PegasusEnv):
             "lin_vel": torch.zeros(self.num_envs, device=self.device),
             "ang_vel": torch.zeros(self.num_envs, device=self.device),
             "distance_to_goal": torch.zeros(self.num_envs, device=self.device),
+            "total": torch.zeros(self.num_envs, device=self.device),
         }
 
         # Resolve body prim index
         vehicle = getattr(self.backend, "_vehicle", None)
         self._body_index = int(getattr(vehicle, "body_index", 0)) if vehicle else 0
-
-        # Calculate robot weight
-        self._robot_weight = float(self.cfg.drone_mass * self.cfg.gravity)
         
         self.backend.create_goal_markers(root_path="/World/GoalMarkers", size=0.15, color=(1.0, 0.0, 0.0))
         self._randomize_goals(torch.arange(self.num_envs, device=self.device))
@@ -112,8 +109,7 @@ class QuadcopterEnv(PegasusEnv):
         forces = torch.zeros((self.num_envs, self.parts_per_vehicle, 3), device=self.device)
         torques = torch.zeros((self.num_envs, self.parts_per_vehicle, 3), device=self.device)
 
-        robot_weight = self._robot_weight or (self.cfg.drone_mass * self.cfg.gravity)
-        thrust = self.cfg.thrust_to_weight * robot_weight * (self._actions[:, 0] + 1.0) / 2.0
+        thrust = self.cfg.thrust_to_weight * (self.cfg.drone_mass * self.cfg.gravity) * (self._actions[:, 0] + 1.0) / 2.0
 
         forces[:, self._body_index, 2] = thrust
         torques[:, self._body_index, :] = self.cfg.moment_scale * self._actions[:, 1:]
@@ -138,6 +134,7 @@ class QuadcopterEnv(PegasusEnv):
         projected_gravity_b = quaternion_apply(quaternion_invert(quat), g_w)
 
         obs = torch.cat([lin_vel_b, ang_vel_b, projected_gravity_b, desired_pos_b], dim=-1)
+
         return {"policy": obs}
 
     def _get_rewards(self) -> torch.Tensor:
@@ -162,13 +159,18 @@ class QuadcopterEnv(PegasusEnv):
         for key, value in rewards.items():
             self._episode_sums[key] += value
 
+        self._episode_sums["total"] += reward
+
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Checks termination (out of bounds) and truncation (timeout) flags."""
         state = self.backend.get_state()
 
+        # Check if altitude is out of bounds (z < 0.1 OR z > 2.0)
         terminated = torch.logical_or(state[:, 2] < self.cfg.min_altitude, state[:, 2] > self.cfg.max_altitude)
+        
+        # Check if episode length has exceeded max_episode_length
         truncated = self.episode_length_buf >= self.max_episode_length - 1
 
         return terminated, truncated
@@ -186,14 +188,14 @@ class QuadcopterEnv(PegasusEnv):
         extras = {}
         for key in self._episode_sums.keys():
             episodic_sum_avg = torch.mean(self._episode_sums[key][env_ids])
-            extras["Episode_Reward/" + key] = (episodic_sum_avg / self.max_episode_length_s).item()
+            extras["Episode_Reward/" + key] = episodic_sum_avg
             self._episode_sums[key][env_ids] = 0.0
 
         self.extras["log"] = extras
         self.extras["log"].update({
-            "Episode_Termination/died": torch.count_nonzero(self.reset_terminated[env_ids]).item(),
-            "Episode_Termination/time_out": torch.count_nonzero(self.reset_time_outs[env_ids]).item(),
-            "Metrics/final_distance_to_goal": final_distance_to_goal.item()
+            "Episode_Termination/died": self.reset_terminated[env_ids].float().mean(),
+            "Episode_Termination/time_out": self.reset_time_outs[env_ids].float().mean(),
+            "Metrics/final_distance_to_goal": final_distance_to_goal,
         })
 
         # Physical reset
@@ -205,11 +207,17 @@ class QuadcopterEnv(PegasusEnv):
         )
 
         self.episode_length_buf[env_ids] = 0
+
         if env_ids.numel() == self.num_envs:
+            # Spread out the resets to avoid spikes in training when many environments reset at a similar time
             self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
 
         self._actions[env_ids] = 0.0
+
+        # Randomize new goal positions for the reset environments
         self._randomize_goals(env_ids)
+
+        # Call all registered reset callbacks
         self._call_reset_callbacks(env_ids)
 
     # -------------------------------------------
