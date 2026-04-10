@@ -1,23 +1,19 @@
 """
 | File: agents/ppo_cfg.py
-| Description: PPO config for skrl — Quadcopter task.
+| Description: PPO config for skrl - Quadcopter task.
 |
 | Structure required by algorithms/ppo.py:
 |   PRESETS["<name>"] = {
 |       "models":    fn(obs_space, act_space, device) -> dict[str, nn.Module]
 |       "cfg":       skrl PPO_DEFAULT_CONFIG dict with overrides
-|       "timesteps": int   — total training timesteps
-|       "seed":      int | None
+|       "timesteps": int - total training timesteps
+|       "seed":      int - None
 |   }
 |
 | To use a custom actor:
 |   Replace the Policy class or pass a different factory in "models".
 |   The Policy only needs to implement skrl's Model interface:
 |       compute(inputs, role) -> (output, log_std, extras_dict)
-|
-| To add a new algo (SAC, TD3, etc.):
-|   Create sac_cfg.py with the same structure but different model keys
-|   and different "cfg" dict (using SAC_DEFAULT_CONFIG).
 """
 import torch
 import torch.nn as nn
@@ -28,9 +24,7 @@ from skrl.resources.schedulers.torch import KLAdaptiveLR
 from skrl.resources.preprocessors.torch import RunningStandardScaler
 
 
-# ── Default networks ──────────────────────────────────────────────────
-# These match the Isaac Lab quadcopter_direct config (256x256x256, ELU).
-# Replace the nn.Sequential inside to use a different architecture.
+# Default networks
 
 class Policy(GaussianMixin, Model):
     """
@@ -81,7 +75,7 @@ def _default_models(obs_space, act_space, device):
     }
 
 
-# ── PPO hyperparameters (Isaac Lab exact) ─────────────────────────────
+# PPO hyperparameters
 
 def _make_cfg(obs_dim: int = 12) -> dict:
     cfg = PPO_DEFAULT_CONFIG.copy()
@@ -108,7 +102,7 @@ def _make_cfg(obs_dim: int = 12) -> dict:
     cfg["entropy_loss_scale"] = 0.0
     cfg["value_loss_scale"]   = 1.0
 
-    # preprocessors — device injected at train time by algorithms/ppo.py
+    # preprocessors - device injected at train time by algorithms/ppo.py
     cfg["state_preprocessor"]        = RunningStandardScaler
     cfg["state_preprocessor_kwargs"] = {"size": obs_dim}  
     cfg["value_preprocessor"]        = RunningStandardScaler
@@ -131,14 +125,13 @@ def _make_cfg(obs_dim: int = 12) -> dict:
     return cfg
 
 
-# ── Presets ───────────────────────────────────────────────────────────
+# Presets
 
 PRESETS = {
     "isaac_lab": {
         "models":    _default_models,
         "cfg":       _make_cfg(obs_dim=12),
-        "timesteps": 24 * 200,  # rollouts * iterations * n_envs
-        #"timesteps": 2000,  # rollouts * iterations * n_envs
+        "timesteps": 24 * 200,  # rollouts * iterations
         "seed":      None,
     },
     "seeded": {
@@ -149,7 +142,7 @@ PRESETS = {
     },
 }
 
-# ── Custom actor example ──────────────────────────────────────────────
+# Custom actor example
 #
 # To swap the actor architecture, subclass Policy and replace self.net:
 #
