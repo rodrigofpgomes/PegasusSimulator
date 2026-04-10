@@ -1,6 +1,6 @@
 """
 | File: skrl_pegasus_wrapper.py
-| Description: Isaac-Lab-style environment wrapper for skrl compatibility.
+| Description: Environment wrapper for skrl compatibility.
 | License: BSD-3-Clause.
 """
 
@@ -97,7 +97,7 @@ class PegasusSkrlWrapper:
         return self._states
 
     # -------------------------------------------
-    # Utilities & Lifecycle
+    # Utilities
     # -------------------------------------------
 
     def render(self, *args, **kwargs):

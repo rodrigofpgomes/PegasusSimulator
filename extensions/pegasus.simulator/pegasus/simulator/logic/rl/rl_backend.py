@@ -156,7 +156,7 @@ class RLBackend(Backend):
                 # Compute the torques to apply on the rigid body
                 tau = -(e_R @ self._Kr.T) - (e_w @ self._Kw.T)
             else:
-                # Direct force bypass
+                # Direct force and torque bypass
                 u_1 = self._forces[:, 0, 2]
                 tau = self._torques[:, 0, :]
 
