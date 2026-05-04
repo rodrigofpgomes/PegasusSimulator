@@ -13,7 +13,7 @@ import torch.nn as nn
 from pegasus.simulator.logic.rl.skrl_pegasus_wrapper import PegasusSkrlWrapper
 
 
-def train(env, agent_cfg: dict, log_dir: str, device: str):
+def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True):
     """Initializes the PPO agent, sets up logging, and starts the training loop."""
     
     # Deferred imports to avoid early CUDA initialization conflicts with Isaac Sim
@@ -61,7 +61,7 @@ def train(env, agent_cfg: dict, log_dir: str, device: str):
 
     trainer_cfg = {
         "timesteps": agent_cfg["timesteps"],
-        "headless": True,
+        "headless": headless,
         "close_environment_at_exit": False,
         "environment_info": "log",
     }

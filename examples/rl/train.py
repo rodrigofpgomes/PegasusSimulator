@@ -154,7 +154,7 @@ def main():
         # Increase GPU Found Lost Aggregate Pairs Capacity
         stage = stage_utils.get_current_stage()
         api = PhysxSchema.PhysxSceneAPI.Apply(stage.GetPrimAtPath("/physicsScene"))
-        api.CreateGpuFoundLostAggregatePairsCapacityAttr().Set(24576)
+        api.CreateGpuFoundLostAggregatePairsCapacityAttr().Set(513141)
 
     # Setup Vehicles
     backend = RLBackend(n_vehicles=n_envs, action_mode="direct_force")
@@ -174,14 +174,14 @@ def main():
     world.reset()
     timeline = omni.timeline.get_timeline_interface()
     timeline.play()
-    world.step(render=False)
+    world.step(render=not args.headless)
 
-    env.reset_manager = ResetManager(vehicle=backend._vehicle, device=device)
+    env.reset_manager = ResetManager(vehicles=[backend._vehicle], device=device)
     env.setup()
 
     # Run Training
     log_dir = os.path.join(TASKS_DIR, args.task, "logs")
-    train_fn(env=env, agent_cfg=agent_cfg, log_dir=log_dir, device=device)
+    train_fn(env=env, agent_cfg=agent_cfg, log_dir=log_dir, device=device, headless=args.headless)
 
     # Cleanup
     timeline.stop()

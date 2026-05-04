@@ -16,6 +16,8 @@ from omni.usd import get_stage_next_free_path
 import isaacsim.core.utils.stage as stage_utils
 from isaacsim.core.prims import RigidPrim
 
+import carb
+
 from omni.isaac.cloner import GridCloner
 from omni.isaac.core.prims import XFormPrimView
 
@@ -36,6 +38,7 @@ class VehicleBatch():
     def __init__(
         self,
         stage_prefix: str,
+        vehicle_batch_id: int,
         usd_path: str,
         n_vehicles: int = 1,
         init_pos=None,
@@ -70,7 +73,13 @@ class VehicleBatch():
         self._stage = self._world.stage
             
         # Save the base stage prefix for the batch and the USD file that defines the vehicle model
-        self._stage_prefix = get_stage_next_free_path(self._stage, stage_prefix, False)
+        #self._stage_prefix = get_stage_next_free_path(self._stage, stage_prefix, False)
+
+        base_stage_prefix = stage_prefix.rstrip("/")
+        self._batch_root = get_stage_next_free_path(self._stage, f"{base_stage_prefix}_batch_{vehicle_batch_id}", False)
+
+        self._stage_prefix = f"{self._batch_root}/env"
+        
         self._usd_file = usd_path
         self._n_vehicles = n_vehicles
 
@@ -86,9 +95,13 @@ class VehicleBatch():
         # Create a batched view over all rigid prims belonging to the vehicles
         self._vehicle_expr = f"{self._stage_prefix}.*/.*"
         self._vehicle_prims = RigidPrim(prim_paths_expr=self._vehicle_expr, name=f"{self._stage_prefix}_prims")
+        self._root_prims = RigidPrim(prim_paths_expr = f"{self._stage_prefix}.*/body", name = f"{self._vehicle_name}_roots")
 
         # Variable that stores the current batched state of the vehicles
         self._state = StateBatch(self.n_vehicles, self.device)
+
+        self._last_forces_local = None
+        self._last_torques_local = None
 
         # Register callback executed before each physics step. 
         # This method should be implemented in classes that inherit the vehicle object.
@@ -154,6 +167,9 @@ class VehicleBatch():
 
         self._parts_per_vehicle = self._vehicle_prims.count // self._n_vehicles
 
+        self._last_forces_local = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self.device)
+        self._last_torques_local = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self.device)
+
         print(f"Spawned {self._n_vehicles} vehicles with {self._parts_per_vehicle} parts each (total {self._vehicle_prims.count} prims)")
 
         self._body_index = next((i for i, p in enumerate(self._vehicle_prims.prim_paths[:self._parts_per_vehicle]) if p.endswith("/body")), None)
@@ -161,7 +177,7 @@ class VehicleBatch():
         # Root prim view - one prim per vehicle (the articulation root).
         # Used by ResetManager to teleport vehicles without touching non-root articulation links, which PhysX does not allow to be set directly.
         # Expression: "{stage_prefix}_*/body" matches quadrotor_0/body, quadrotor_1/body, ...
-        self._root_prims = RigidPrim(prim_paths_expr = f"{self._stage_prefix}_*/body", name = f"{self._stage_prefix}_roots")
+        self._root_prims = RigidPrim(prim_paths_expr = f"{self._stage_prefix}.*/body", name = f"{self._vehicle_name}_roots")
 
         self._root_prims.initialize()
 
@@ -232,10 +248,10 @@ class VehicleBatch():
             target_paths = cloner.generate_paths(self._stage_prefix, self.n_vehicles)
 
             # Clone the base vehicle to the generated paths
-            cloner.clone(source_prim_path=f"{self._stage_prefix}_0", prim_paths=target_paths, replicate_physics=True, copy_from_source=True, base_env_path="/World", root_path=f"{self._stage_prefix}_", enable_env_ids=True)
+            cloner.clone(source_prim_path=f"{self._stage_prefix}_0", prim_paths=target_paths, replicate_physics=True, copy_from_source=True, base_env_path=self._batch_root, root_path=f"{self._stage_prefix}_", enable_env_ids=True)
 
         # Create a view over the root prim of each vehicle
-        vehicles = XFormPrimView(prim_paths_expr=f"{self._stage_prefix}_.*/")
+        vehicles = XFormPrimView(prim_paths_expr=f"{self._stage_prefix}.*/")
 
         # Retrieve the world poses of the spawned vehicles
         set_init_pos, set_init_orientation = vehicles.get_world_poses()
@@ -345,6 +361,8 @@ class VehicleBatch():
             #for graphical_sensor in self._graphical_sensors:
             #    graphical_sensor.start()
 
+            carb.log_info(f"Simulation started for vehicle batch {self.vehicle_name}.")
+
             # Invoke the start method of the vehicle (if it exists)
             self.start()
 
@@ -392,6 +410,10 @@ class VehicleBatch():
 
         #print("Applying forces:", forces)
         #print("Applying torques:", torques)
+
+        if self._parts_per_vehicle is not None:
+            self._last_forces_local = forces.reshape(self._n_vehicles, self._parts_per_vehicle, 3).detach().clone()
+            self._last_torques_local = torques.reshape(self._n_vehicles, self._parts_per_vehicle, 3).detach().clone()
 
         # Apply the force to the rigidbody. The force should be expressed in the rigidbody frame
         self._vehicle_prims.apply_forces_and_torques_at_pos(forces, torques, is_global=False)
@@ -470,6 +492,51 @@ class VehicleBatch():
         for backend in self._backends:
             backend._vehicle = self
             backend.update_state(self._state)
+
+    def set_state_batch(
+        self,
+        env_ids: torch.Tensor,
+        positions: torch.Tensor,
+        attitudes: torch.Tensor,
+        linear_velocity: torch.Tensor | None = None,
+        angular_velocity: torch.Tensor | None = None,
+    ):
+        if env_ids.numel() == 0:
+            return
+
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+
+        if linear_velocity is None:
+            linear_velocity = torch.zeros((env_ids.numel(), 3), device=self.device, dtype=torch.float32)
+
+        if angular_velocity is None:
+            angular_velocity = torch.zeros((env_ids.numel(), 3), device=self.device, dtype=torch.float32)
+
+        positions = positions.to(device=self.device, dtype=torch.float32)
+        attitudes = attitudes.to(device=self.device, dtype=torch.float32)
+        linear_velocity = linear_velocity.to(device=self.device, dtype=torch.float32)
+        angular_velocity = angular_velocity.to(device=self.device, dtype=torch.float32)
+
+        self._state.position[env_ids] = positions
+        self._state.attitude[env_ids] = attitudes
+
+        self._state.linear_velocity[env_ids] = linear_velocity
+
+        self._state.linear_body_velocity[env_ids] = quaternion_apply(quaternion_invert(attitudes), linear_velocity)
+
+        self._state.angular_velocity[env_ids] = angular_velocity
+
+        self._state.linear_acceleration[env_ids] = 0.0
+
+        for backend in self._backends:
+            if hasattr(backend, "set_state"):
+                backend.set_state(
+                    env_ids=env_ids,
+                    positions=positions,
+                    attitudes=attitudes,
+                    linear_velocity=self._state.linear_velocity[env_ids],
+                    angular_velocity=self._state.angular_velocity[env_ids],
+                )
 
 
     def start(self):

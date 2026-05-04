@@ -46,6 +46,8 @@ class RLBackend(Backend):
         self._goal_marker_view = None
         self._goal_marker_paths = []
 
+        self._vehicle = None
+
     # -------------------------------------------
     # Properties
     # -------------------------------------------
@@ -168,7 +170,7 @@ class RLBackend(Backend):
         """Caches the new physics state after a simulation step."""
         self._state_cache = torch.cat([
             state.position,
-            state.linear_body_velocity,
+            state.linear_velocity,
             state.attitude,
             state.angular_velocity,
         ], dim=-1)
@@ -195,13 +197,13 @@ class RLBackend(Backend):
         self._forces = forces
         self._torques = torques
 
-    def set_state_for_envs(self, env_ids: torch.Tensor, positions: torch.Tensor, attitudes: torch.Tensor, 
-                           linear_body_velocity: torch.Tensor | None = None, angular_velocity: torch.Tensor | None = None):
+    def set_state(self, env_ids: torch.Tensor, positions: torch.Tensor, attitudes: torch.Tensor, 
+                           linear_velocity: torch.Tensor | None = None, angular_velocity: torch.Tensor | None = None):
         """Overrides the state matrix for selected environments (e.g., during resets)."""
         if self._state_cache is None or env_ids.numel() == 0:
             return
 
-        lin_vel = linear_body_velocity if linear_body_velocity is not None else torch.zeros((env_ids.numel(), 3), device=self._device, dtype=self._state_cache.dtype)
+        lin_vel = linear_velocity if linear_velocity is not None else torch.zeros((env_ids.numel(), 3), device=self._device, dtype=self._state_cache.dtype)
         ang_vel = angular_velocity if angular_velocity is not None else torch.zeros((env_ids.numel(), 3), device=self._device, dtype=self._state_cache.dtype)
 
         self._state_cache[env_ids, 0:3] = positions

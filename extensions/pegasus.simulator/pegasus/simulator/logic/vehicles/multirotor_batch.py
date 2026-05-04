@@ -93,7 +93,7 @@ class MultirotorBatch(VehicleBatch):
             config = MultirotorBatchConfig(n_vehicles=n_vehicles)
 
         # 1. Initialize the VehicleBatch base class
-        super().__init__(stage_prefix, usd_file, n_vehicles, init_pos, init_orientation, config.sensors, config.graphical_sensors, config.graphs, config.backends, spacing)
+        super().__init__(stage_prefix, vehicle_batch_id, usd_file, n_vehicles, init_pos, init_orientation, config.sensors, config.graphical_sensors, config.graphs, config.backends, spacing)
 
         # 2. Setup the dynamics of the system - get the thrust curve of the vehicle from the configuration
         self._thrusters = config.thrust_curve
@@ -173,8 +173,7 @@ class MultirotorBatch(VehicleBatch):
         Precompute and cache quantities required for multirotor dynamics,
         such as rotor positions relative to the body frame and the control
         allocation matrix. This method is called when the simulation starts.
-        """
-
+        """        
         # 1. Initialize the vehicle primitives and internal state
         self.initialize()
 
@@ -211,6 +210,9 @@ class MultirotorBatch(VehicleBatch):
         for backend in self._backends:
             backend._vehicle = self
             backend.update(dt)
+
+        if not self._backends:
+            return
 
         # TODO: Add batched propeller visual updates for rotor animation.
 

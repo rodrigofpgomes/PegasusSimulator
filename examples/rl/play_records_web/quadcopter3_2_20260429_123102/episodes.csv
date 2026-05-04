@@ -1,0 +1,14 @@
+env_id,episode_id,end_global_step,length_steps,duration_s,reason
+2,0,138,138,2.7600000000000002,truncated
+1,0,243,243,4.86,truncated
+3,0,273,273,5.46,truncated
+0,0,452,452,9.040000000000001,truncated
+2,1,637,499,9.98,truncated
+1,1,742,499,9.98,truncated
+3,1,772,499,9.98,truncated
+3,2,939,167,3.34,terminated
+0,1,951,499,9.98,truncated
+2,2,1136,499,9.98,truncated
+1,2,1241,499,9.98,truncated
+3,3,1438,499,9.98,truncated
+0,2,1450,499,9.98,truncated
