@@ -1,0 +1,10 @@
+{
+  "vehicle": "iris",
+  "vehicles": [
+    { "name": "raptor",   "type": "raptor",   "checkpoint": null },
+    { "name": "pretrain", "type": "pretrain", "checkpoint": "/home/rodrigogomes/raptor/rl-tools/experiments/2026-05-27_12-25-16/e43ae4b_foundation-policy-pre-training_dynamics-id/0/0000/steps/000000001000000/checkpoint.h5" },
+    { "name": "sac",      "type": "sac",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/raptor_pretrain/logs/26-06-09_22-54-29-214064_SACDelayed_delay_2/checkpoints/agent_310000.pt" },
+    { "name": "sac_skrl", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/raptor_pretrain/logs/26-06-09_22-54-29-214064_SACDelayed_delay_2/checkpoints/agent_310000.pt", "task": "raptor_pretrain", "preset": "isaac_lab" },
+    { "name": "ppo_isaac",      "type": "ppo",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/double_integrator/01_isaac_lab/logs/26-06-08_00-14-44-664165_PPO/checkpoints/best_agent.pt", "task": "double_integrator/01_isaac_lab", "preset": "isaac_lab" }
+  ]
+}

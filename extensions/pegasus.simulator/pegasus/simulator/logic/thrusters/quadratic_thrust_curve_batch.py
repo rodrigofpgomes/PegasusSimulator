@@ -14,7 +14,7 @@ class QuadraticThrustCurveBatch(ThrustCurve):
     def __init__(self, config={}, n_vehicles = 1, device="cpu"):
         """
         Args:
-            config (dict): A Dictionary that contains all the parameters for configuring the QuadraticThrustCurve - it can be empty or only have some of the parameters used by the QuadraticThrustCurve.
+            config (dict): A Dictionary that contains all the parameters for configuring the QuadraticThrustCurve - empty dictionary means use default values (iris drone) without motor delays.
             n_vehicles (int): The number of vehicles for which to simulate the thrust curve.
             device (str): The device on which to run the simulation.
 
@@ -27,6 +27,7 @@ class QuadraticThrustCurveBatch(ThrustCurve):
             >>>  "rot_dir": [-1, -1, 1, 1],
             >>>  "min_rotor_velocity": [0, 0, 0, 0],                      # rad/s
             >>>  "max_rotor_velocity": [1100, 1100, 1100, 1100],          # rad/s
+            >>>  "motor_time_constant": [0.00, 0.00, 0.00, 0.00],
             >>> }
         """
         # Set device
@@ -63,11 +64,24 @@ class QuadraticThrustCurveBatch(ThrustCurve):
         # The actual velocity that each rotor is spinning at
         self._velocity = torch.zeros((self.n_vehicles, self._num_rotors), dtype=torch.float32, device=self.device)
 
+        # Normalised rotor speed in [-1, 1] applied at reset (seeds the policy's rotor-speed observation)
+        self._reset_rotor_norm = torch.zeros((self.n_vehicles, self._num_rotors), dtype=torch.float32, device=self.device)
+
         # The actual force that each rotor is generating
         self._force = torch.zeros((self.n_vehicles, self._num_rotors), dtype=torch.float32, device=self.device)
 
         # The actual rolling moment that is generated on the body frame of the vehicle
         self._rolling_moment = torch.zeros(self.n_vehicles, dtype=torch.float32, device=self.device)
+
+        self._motor_time = torch.tensor(config.get("motor_time", 0.0), dtype=torch.float32, device=self.device)
+
+        motor_tau = torch.as_tensor(config.get("motor_time_constant", 0.0), dtype=torch.float32, device=self.device)
+
+        if motor_tau.ndim == 0:
+            motor_tau = motor_tau.repeat(self._num_rotors)
+        
+        self._motor_time_constant = motor_tau
+
 
     def set_input_reference(self, input_reference):
         """
@@ -78,24 +92,12 @@ class QuadraticThrustCurveBatch(ThrustCurve):
         """
 
         if input_reference.ndim == 1:
-            if input_reference.shape[0] != self._num_rotors:
-                raise ValueError(
-                    f"input_reference must have {self._num_rotors} rotors, got {input_reference.shape[0]}"
-                )
             input_reference = input_reference.unsqueeze(0).expand(self.n_vehicles, -1)
-
-        elif input_reference.ndim == 2:
-            if input_reference.shape != (self.n_vehicles, self._num_rotors):
-                raise ValueError(
-                    f"input_reference must have shape "
-                    f"({self.n_vehicles}, {self._num_rotors}), got {tuple(input_reference.shape)}"
-                )
-        else:
-            raise ValueError("input_reference must be 1D or 2D")
 
         # The target angular velocity of the rotor
         self._input_reference = torch.as_tensor(input_reference, dtype=torch.float32, device=self.device)
-
+        
+        
     def update(self, state: State, dt: float):
         """
         Note: the state and dt variables are not used in this implementation, but left
@@ -111,9 +113,26 @@ class QuadraticThrustCurveBatch(ThrustCurve):
         min_vel = self.min_rotor_velocity.unsqueeze(0)
         max_vel = self.max_rotor_velocity.unsqueeze(0)
 
-        # Set the actual velocity that each rotor is spinning at (instanenous model - no delay introduced)
-        # Only apply clipping of the input reference
-        self._velocity = torch.clamp(self._input_reference, min=min_vel, max=max_vel)
+        # Desired rotor velocity after clipping
+        target_velocity = torch.clamp(self._input_reference, min=min_vel, max=max_vel)
+        
+        # Motor first-order response:
+        # dw/dt = (w_cmd - w) / tau
+        dt_t = torch.as_tensor(float(dt), dtype=torch.float32, device=self.device)
+
+        tau = self._motor_time_constant.unsqueeze(0)  # shape: (1, num_rotors)
+
+        # If tau <= 0, use instantaneous response
+        if torch.all(tau <= 0.0):
+            self._velocity = target_velocity
+        else:
+            tau = torch.clamp(tau, min=1e-6)
+            alpha = 1.0 - torch.exp(-dt_t / tau)
+
+            self._velocity = self._velocity + alpha * (target_velocity - self._velocity)
+
+            # Safety clipping
+            self._velocity = torch.clamp(self._velocity, min=min_vel, max=max_vel)
 
         # Set the force using a quadratic thrust curve
         self._force = self._rotor_constant.unsqueeze(0) * torch.pow(self._velocity, 2)

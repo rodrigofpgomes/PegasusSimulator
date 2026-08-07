@@ -22,7 +22,7 @@ class RLBackend(Backend):
     torques, and state caching between the simulation physics steps and the RL policy.
     """
 
-    def __init__(self, n_vehicles: int, action_mode: str = "direct_force", inner_loop: bool = False):
+    def __init__(self, n_vehicles: int, action_mode: str = "direct_force", inner_loop: bool = False, device: str | None = None):
         """Initializes the backend with vehicle count, action mode, and control loop preference."""
         super().__init__(config=None)
 
@@ -32,11 +32,11 @@ class RLBackend(Backend):
 
         # Initialized later in start()
         self._parts_per_vehicle = None
-        self._device = None
+        self._device = device
 
         self._forces = None
         self._torques = None
-        self._input_ref = None
+        self._input_reference = None
         self._state_cache = None
         self._received_first_state = False
 
@@ -79,11 +79,13 @@ class RLBackend(Backend):
         """Allocates PyTorch buffers once the simulation timeline starts."""
         self._n_vehicles = self.vehicle.n_vehicles
         self._parts_per_vehicle = self.vehicle.parts_per_vehicle
-        self._device = self.vehicle.device
+        self._device = self.vehicle.device or self._device
+
+        num_rotors = self.vehicle._thrusters._num_rotors
 
         self._forces = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
         self._torques = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
-        self._input_ref = torch.zeros((self._n_vehicles, 4), dtype=torch.float32, device=self._device)
+        self._input_reference = torch.zeros((self._n_vehicles, num_rotors), dtype=torch.float32, device=self._device)
         self._state_cache = torch.zeros((self._n_vehicles, 13), dtype=torch.float32, device=self._device)
 
         self._received_first_state = False
@@ -102,13 +104,17 @@ class RLBackend(Backend):
         if self._forces is not None:
             self._forces.zero_()
             self._torques.zero_()
-            self._input_ref.zero_()
+            self._input_reference.zero_()
             self._state_cache.zero_()
         self._received_first_state = False
 
     def update(self, dt: float):
         """Transforms requested RL actions into forces or rotor speeds before the physics step."""
         if not self._received_first_state:
+            return
+
+        # Direct rotor velocity: _input_reference was already set by the RL env - nothing to do.
+        if self._action_mode == "rotor_velocity_direct":
             return
 
         if self._action_mode == "rotor_velocity":
@@ -164,7 +170,7 @@ class RLBackend(Backend):
                 tau = self._torques[:, 0, :]
 
             # Convert forces/torques to rotor angular velocities
-            self._input_ref = self.vehicle.force_and_torques_to_velocities(u_1, tau)
+            self._input_reference = self.vehicle.force_and_torques_to_velocities(u_1, tau)
 
     def update_state(self, state: StateBatch):
         """Caches the new physics state after a simulation step."""
@@ -186,7 +192,7 @@ class RLBackend(Backend):
 
     def input_reference(self) -> torch.Tensor:
         """Returns the desired rotor velocities (used in 'rotor_velocity' mode)."""
-        return self._input_ref
+        return self._input_reference
 
     # -------------------------------------------
     # VecEnv Interface

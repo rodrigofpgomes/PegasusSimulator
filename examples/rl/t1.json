@@ -1,0 +1,8 @@
+{
+  "vehicle": "iris",
+  "vehicles": [
+    { "name": "raptor",   "type": "raptor",   "checkpoint": null },
+    { "name": "rep_pretrain", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/raptor_pretrain/logs/26-06-09_22-54-29-214064_SACDelayed_delay_2/checkpoints/agent_310000.pt", "task": "raptor_pretrain", "preset": "isaac_lab" },
+    { "name": "rep_lemniscate", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/raptor_pretrain2/logs/26-07-02_11-29-55-185742_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "raptor_pretrain2", "preset": "isaac_lab" }
+  ]
+}

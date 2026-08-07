@@ -5,6 +5,12 @@
 | License: BSD-3-Clause. Copyright (c) 2024, Marcelo Jacinto. All rights reserved.
 | Description: Definition of the MultirotorBatch class, which serves as the base class for batched multirotor vehicles.
 """
+
+# Standard library imports
+from __future__ import annotations
+from collections.abc import Mapping, Sequence
+from typing import Any, Literal
+
 import torch
 
 # The vehicle interface
@@ -15,8 +21,10 @@ from pegasus.simulator.logic.backends.px4_mavlink_backend import PX4MavlinkBacke
 
 # Sensors and dynamics setup
 from pegasus.simulator.logic.dynamics import LinearDragBatch
-from omni.isaac.core.utils.torch.rotations import quat_rotate_inverse
 from pegasus.simulator.logic.thrusters import QuadraticThrustCurveBatch
+#from omni.isaac.core.utils.torch.rotations import quat_rotate_inverse
+from pegasus.simulator.logic.transforms import quaternion_apply, quaternion_invert
+
 
 # Default sensors can be enabled here if batch sensor support is required.
 #from pegasus.simulator.logic.sensors import Barometer, IMU, Magnetometer, GPS
@@ -24,16 +32,35 @@ from pegasus.simulator.logic.thrusters import QuadraticThrustCurveBatch
 # Extension APIs
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 
+# For debugging purposes
+import carb
+
+
+InputMode = Literal["rotor_velocity", "rotor_velocity_direct", "forces_torques"]
+
 
 class MultirotorBatchConfig:
     """
     Class used to configure a MultirotorBatch vehicle.
     """
 
-    def __init__(self, n_vehicles=1):
+    def __init__(
+        self,
+        cfg: Mapping[str, Any] | None = None,
+        n_vehicles: int = 1,
+        sensors: Sequence[Any] | None = None,
+        graphical_sensors: Sequence[Any] | None = None,
+        graphs: Sequence[Any] | None = None,
+        backends: Sequence[Any] | None = None,
+        rotor_prim_names: Sequence[str] | None = None,
+    ) -> None:
         """
         Initialize the MultirotorBatch configuration.
         """
+
+        if n_vehicles <= 0:
+            raise ValueError("n_vehicles must be greater than zero")
+
         # Define the same device that is running the simulation
         device = PegasusInterface()._world_settings["device"]
 
@@ -44,24 +71,27 @@ class MultirotorBatchConfig:
         self.usd_file = ""
 
         # Default thrust curve and drag model for the batched quadrotors
-        self.thrust_curve = QuadraticThrustCurveBatch(n_vehicles=n_vehicles, device = device)
+        self.thrust_curve = QuadraticThrustCurveBatch(config=dict(cfg) if cfg else {}, n_vehicles=n_vehicles, device = device)
         self.drag = LinearDragBatch(n_vehicles=n_vehicles, drag_coefficients=[0.50, 0.30, 0.0])
 
         # Default onboard sensors for the batched quadrotors.
         # These are currently disabled until batch sensor support is enabled.
         #self.sensors = [Barometer(device=device), IMU(device=device), Magnetometer(device=device), GPS(device=device)]
-        self.sensors = []
+        self.sensors = tuple(sensors or ())
 
         # Default graphical sensors for the batched quadrotors
-        self.graphical_sensors = []
+        self.graphical_sensors = tuple(graphical_sensors or ())
 
         # Default OmniGraph graphs for the batched quadrotors
-        self.graphs = []
+        self.graphs = tuple(graphs or ())
 
         # Backends used to send commands to the batched vehicles.
         # This can be a PX4, ROS 2, or custom backend implementation, or an empty list if no backend is required.
-        self.backends = []
+        self.backends = tuple(backends or ())
 
+        # Optional: Names of the rotor prims in the USD file, used to cache their positions relative to the body frame.
+        self.rotor_prim_names = tuple(rotor_prim_names) if rotor_prim_names is not None else None
+        
 
 class MultirotorBatch(VehicleBatch):
     """MultirotorBatch class - It defines a base interface for batched multirotor vehicles."""
@@ -98,10 +128,82 @@ class MultirotorBatch(VehicleBatch):
         # 2. Setup the dynamics of the system - get the thrust curve of the vehicle from the configuration
         self._thrusters = config.thrust_curve
         self._drag = config.drag
+        self._rotor_prim_names = config.rotor_prim_names
 
-        self._input_mode = None
+        # Default control mode. The backend pushes the authoritative mode via set_input_mode() in start()
+        self._input_mode = "rotor_velocity"
         
+        self._rotor_indices: tuple[int, ...] | None = None
+        self._rotor_positions_body: torch.Tensor | None = None
+        self._allocation_matrix: torch.Tensor | None = None
+        self._allocation_inv: torch.Tensor | None = None
+
+        self._forces: torch.Tensor | None = None
+        self._torques: torch.Tensor | None = None
     
+
+    def start(self):
+        """
+        Precompute and cache quantities required for multirotor dynamics,
+        such as rotor positions relative to the body frame and the control
+        allocation matrix. This method is called when the simulation starts.
+        """        
+        # 1. Initialize the vehicle primitives and internal state
+        self.initialize()
+
+        # 2. Obtain the indices of the rotor prims
+        self._resolve_rotor_indices()
+
+        # 3. Cache the rotor positions relative to the vehicle body frame.
+        #    These are used when computing the forces applied in the simulator.
+        self._cache_rotor_positions_body()
+
+        # 4. Cache the control allocation matrix that maps desired body-frame
+        #    forces and torques to rotor angular velocities.
+        self._cache_allocation_matrix()
+
+        self._forces = torch.zeros((self.n_vehicles, self.parts_per_vehicle, 3), dtype=torch.float32, device=self.device)
+        self._torques = torch.zeros((self.n_vehicles, self.parts_per_vehicle, 3), dtype=torch.float32, device=self.device)
+    
+
+    def stop(self):
+        """
+        No extra actions are required when the simulation stops.
+        """
+        return
+
+
+    def _resolve_rotor_indices(self) -> None:
+        """
+        Resolve the indices of the rotor prims in the vehicle's USD hierarchy.
+        
+        The method assumes that the first 'parts_per_vehicle' prims in the batch 
+        correspond to the first vehicle, and uses the provided rotor prim names (if any) 
+        to identify which of those prims correspond to rotors. 
+        
+        If rotor prim names are not provided, it assumes that all prims except the one at `body_index` are rotors.
+        """
+
+        first_vehicle_paths = self._vehicle_prims.prim_paths[: self.parts_per_vehicle]
+        num_rotors = self._thrusters._num_rotors
+
+        if self._rotor_prim_names is None:
+            indices = tuple(index for index in range(self.parts_per_vehicle) if index != self.body_index)
+        else:
+            path_name_to_index = {path.rsplit("/", 1)[-1]: index for index, path in enumerate(first_vehicle_paths)}
+            missing = [name for name in self._rotor_prim_names if name not in path_name_to_index]
+
+            if missing:
+                raise RuntimeError(f"Rotor prims not found under {self._stage_prefix}: {missing}")
+
+            indices = tuple(path_name_to_index[name] for name in self._rotor_prim_names)
+
+        if len(indices) != num_rotors:
+            raise RuntimeError(f"Expected {num_rotors} rotor prims, found {len(indices)}.")
+
+        self._rotor_indices = indices
+
+
     def _cache_rotor_positions_body(self):
         """
         Compute and cache rotor positions relative to the vehicle body frame.
@@ -110,26 +212,25 @@ class MultirotorBatch(VehicleBatch):
         with respect to the body.
         """
 
-        pos, quat = self._vehicle_prims.get_world_poses()
+        positions, attitudes = self._vehicle_prims.get_world_poses()
 
         # Reshape from (n_vehicles * parts_per_vehicle, 3) to (n_vehicles, parts_per_vehicle, 3)
-        pos = torch.as_tensor(pos, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 3)
-        quat = torch.as_tensor(quat, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 4)
-        
+        positions = torch.as_tensor(positions, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 3)
+        attitudes = torch.as_tensor(attitudes, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 4)
 
         # Extract body and rotor poses
-        body_pos = pos[:, self._body_index, :]       # (n_vehicles, 3)
-        body_quat = quat[:, self._body_index, :]     # (n_vehicles, 4)
-        rotor_pos = pos[:, self._body_index + 1:, :]     # (n_vehicles, num_rotors, 3)
+        body_position = positions[:, self._body_index, :]       # (n_vehicles, 3)
+        body_quaternion = attitudes[:, self._body_index, :]     # (n_vehicles, 4)
+        rotor_positions = positions[:, self._rotor_indices, :]     # (n_vehicles, num_rotors, 3)
 
         # Compute rotor positions relative to the body in the world frame
-        relative_pos_world = rotor_pos - body_pos.unsqueeze(1)
+        relative_positions_world = rotor_positions - body_position.unsqueeze(1)
 
         # Expand body quaternion so that one quaternion is associated with each rotor
-        body_quat_expanded = body_quat.unsqueeze(1).expand(-1, self._thrusters._num_rotors, -1)
+        body_quaternion = body_quaternion.unsqueeze(1).expand(-1, self._thrusters._num_rotors, -1)
 
         # Rotate relative positions into the body frame
-        self._rotor_positions_body = quat_rotate_inverse(body_quat_expanded.reshape(-1, 4), relative_pos_world.reshape(-1, 3)).view(self._n_vehicles, self._thrusters._num_rotors, 3)
+        self._rotor_positions_body = quaternion_apply(quaternion_invert(body_quaternion.reshape(-1, 4)), relative_positions_world.reshape(-1, 3)).reshape(self._n_vehicles, self._thrusters._num_rotors, 3)
 
 
     def _cache_allocation_matrix(self):
@@ -142,14 +243,14 @@ class MultirotorBatch(VehicleBatch):
         """
 
         # Use the first vehicle as reference since all vehicles share the same geometry
-        rotor_pos_body = self._rotor_positions_body[0]   # (num_rotors, 3)
+        rotor_positions = self._rotor_positions_body[0]   # (num_rotors, 3)
 
-        x = rotor_pos_body[:, 0]
-        y = rotor_pos_body[:, 1]
+        x = rotor_positions[:, 0]
+        y = rotor_positions[:, 1]
 
-        kf = self._thrusters._rotor_constant
-        km = self._thrusters._rolling_moment_coefficient
-        rot_dir = self._thrusters._rot_dir.to(torch.float32)
+        kf = self._thrusters._rotor_constant.to(device=self._device, dtype=torch.float32)
+        km = self._thrusters._rolling_moment_coefficient.to(device=self._device, dtype=torch.float32)
+        rotor_directions = self._thrusters._rot_dir.to(device=self._device, dtype=torch.float32)
 
         self._allocation_matrix = torch.zeros((4, self._thrusters._num_rotors), dtype=torch.float32, device=self._device)
 
@@ -163,37 +264,15 @@ class MultirotorBatch(VehicleBatch):
         self._allocation_matrix[2, :] = -x * kf
 
         # Yaw torque contribution from rotor drag
-        self._allocation_matrix[3, :] = km * rot_dir
+        self._allocation_matrix[3, :] = km * rotor_directions
 
-        # Precompute pseudo-inverse for fast control allocation
+        # Precompute pseudo-inverse for fast control allocation (matrix with rank 4)
         self._allocation_inv = torch.linalg.pinv(self._allocation_matrix)
 
-    def start(self):
-        """
-        Precompute and cache quantities required for multirotor dynamics,
-        such as rotor positions relative to the body frame and the control
-        allocation matrix. This method is called when the simulation starts.
-        """        
-        # 1. Initialize the vehicle primitives and internal state
-        self.initialize()
-
-        # 2. Cache the rotor positions relative to the vehicle body frame.
-        #    These are used when computing the forces applied in the simulator.
-        self._cache_rotor_positions_body()
-
-        # 3. Cache the control allocation matrix that maps desired body-frame
-        #    forces and torques to rotor angular velocities.
-        self._cache_allocation_matrix()
-
-    def stop(self):
-        """
-        No extra actions are required when the simulation stops.
-        """
-        pass
 
     def update(self, dt: float):
         """
-        Compute and apply the batched forces and torques to the vehicles in simulation.
+        Compute and apply the input consistent with the selected control input mode.
 
         Depending on the selected input mode, the commands are interpreted either as
         rotor angular velocities or as body-frame forces and torques. This callback
@@ -208,55 +287,51 @@ class MultirotorBatch(VehicleBatch):
 
         # Call the update methods in all backends
         for backend in self._backends:
-            backend._vehicle = self
             backend.update(dt)
 
         if not self._backends:
             return
 
+        self._forces.zero_()
+        self._torques.zero_()
+
         # TODO: Add batched propeller visual updates for rotor animation.
+        # Rotor angular velocity mode (also used for direct rotor-velocity actions)
+        if self._input_mode in ("rotor_velocity", "rotor_velocity_direct"):
 
-        # Rotor angular velocity mode
-        if self._input_mode == "rotor_velocity":
-
-            if len(self._backends) != 0:
-                desired_rotor_velocities = self._backends[0].input_reference()
-            else:
-                desired_rotor_velocities = torch.zeros((self._n_vehicles, self._thrusters._num_rotors), dtype=torch.float32, device=self._device)
-
+            desired_rotor_velocities = self._backends[0].input_reference()
+            
             # Input the desired rotor velocities in the thruster model
             self._thrusters.set_input_reference(desired_rotor_velocities)
 
-            forces = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
-            torques = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
-
             # Compute the rotor thrust forces and the desired rolling_moment
-            forces_z, _, rolling_moment = self._thrusters.update(self._state, dt)
+            rotor_forces_z, _, rolling_moment = self._thrusters.update(self._state, dt)
 
             # Apply the force in Z to each rotor in the rotor frame
+            self._forces[:, self._rotor_indices, 2] = rotor_forces_z
+
             # Apply the torque to the body frame of the vehicle that corresponds to the rolling moment
-            forces[:, 1:, 2] = forces_z
-            torques[:, 0, 2] = rolling_moment
+            self._torques[:, self._body_index, 2] = rolling_moment
 
-            # Compute the total linear drag force to apply to the vehicle's body frame
-            # drag = self._drag.update(self._state, dt)
+            #carb.log_warn(f"Rotor forces (Z): {rotor_forces_z}")
+            #carb.log_warn(f"Rolling moment: {rolling_moment}")
 
-            # forces[:, 0, :] += drag
         
         # Direct body force and torque mode
         else:
             forces, torques = self._backends[0].get_forces_and_torques()
+            self._forces.copy_(forces)
+            self._torques.copy_(torques)
 
-            # Optional: add linear drag on the vehicle body.
-            # drag = self._drag.update(self._state, dt)
-            # forces[:, 0, :] += drag
-
+        # Optional: add linear drag on the vehicle body.
+        drag = self._drag.update(self._state, dt)
+        #self._forces[:, 0, :] += drag
 
         # Apply the batched forces and torques in the simulator.
-        self.apply_forces_and_torques_all_parts(forces, torques)
+        self.apply_forces_and_torques_all_parts(self._forces, self._torques)
 
 
-    def force_and_torques_to_velocities(self, force: torch.Tensor, torque: torch.Tensor):
+    def force_and_torques_to_velocities(self, force: torch.Tensor, torque: torch.Tensor) -> torch.Tensor:
         """
         Auxiliary method used to get the target angular velocities for each rotor, given the total desired thrust [N] and
         torque [Nm] to be applied in the multirotor's body frame.
@@ -272,11 +347,16 @@ class MultirotorBatch(VehicleBatch):
             torch.Tensor: Target rotor angular velocities, shape (n_vehicles, num_rotors).
         """
 
+        force = force.to(device=self._device, dtype=torch.float32)
+        torque = torque.to(device=self._device, dtype=torch.float32)
+
+        allocation_inv = self._allocation_inv.to(device=self._device, dtype=torch.float32)
+
         # Build desired wrench vector [T, tau_x, tau_y, tau_z]
         wrench = torch.cat((force.unsqueeze(1), torque), dim=1)   # (n_vehicles, 4)
 
         # Solve for squared angular velocities
-        squared_ang_vel = wrench @ self._allocation_inv.T         # (n_vehicles, num_rotors)
+        squared_ang_vel = wrench @ allocation_inv.T         # (n_vehicles, num_rotors)
 
         # Clamp negative values caused by the pseudo-inverse
         squared_ang_vel = torch.clamp(squared_ang_vel, min=0.0)
@@ -299,7 +379,8 @@ class MultirotorBatch(VehicleBatch):
         Set the control input mode used by the batched multirotor.
 
         Args:
-            input_mode (str): Control input mode. Expected values are "rotor_velocity" or "forces_torques".
+            input_mode (str): Control input mode. 
+            Expected values are "rotor_velocity", "rotor_velocity_direct", or "forces_torques".
         """
         self._input_mode = input_mode
 

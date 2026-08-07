@@ -1,0 +1,6 @@
+{
+  "vehicle": "shuttle_glider",
+  "vehicles": [
+    { "name": "shuttle_glider_v3", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v3/logs/26-07-17_00-52-02-236495_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "shuttle_glider/shuttle_glider_v3", "preset": "isaac_lab" }
+  ]
+}

@@ -80,7 +80,8 @@ class NonlinearControllerBatch(Backend):
         self.int = torch.zeros((n_vehicles, 3), dtype=torch.float32, device=device)
 
         # Define the dynamic parameters for the vehicle
-        self.m = 1.50        # Mass in Kg
+        self.m = 1.5        # Mass in Kg
+
         self.g = 9.81       # The gravity acceleration ms^-2
 
         # Read the target trajectory from a CSV file inside the trajectories directory
@@ -147,7 +148,7 @@ class NonlinearControllerBatch(Backend):
         self.vehicle.set_input_mode(input_mode=self._action_mode)
 
         self.reset_statistics()
-        
+
 
     def stop(self):
         """
@@ -207,10 +208,10 @@ class NonlinearControllerBatch(Backend):
         Args:
             state (State): The current state of the vehicle.
         """
-        self.p = state.position
-        self.R = quaternion_to_matrix(state.attitude)
-        self.w = state.angular_velocity
-        self.v = state.linear_velocity
+        self.p = state.position.to(device=self.device, dtype=torch.float32)
+        self.R = quaternion_to_matrix(state.attitude.to(device=self.device, dtype=torch.float32))
+        self.w = state.angular_velocity.to(device=self.device, dtype=torch.float32)
+        self.v = state.linear_velocity.to(device=self.device, dtype=torch.float32)
 
         self.reveived_first_state = True
 

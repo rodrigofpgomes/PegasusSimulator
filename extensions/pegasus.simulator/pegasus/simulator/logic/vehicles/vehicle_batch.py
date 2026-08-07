@@ -5,21 +5,24 @@
 | License: BSD-3-Clause. Copyright (c) 2024, Marcelo Jacinto. All rights reserved.
 | Description: Definition of the VehicleBatch class, adapted to support batched simulation of multiple vehicles.
 """
+
+# Standard library imports
+from __future__ import annotations
+from abc import ABC, abstractmethod
+from collections.abc import Sequence
+from typing import Any
+
 import torch
 
 # Low level APIs
-from pxr import UsdGeom, Gf
+from pxr import UsdGeom, Gf, Usd, UsdPhysics
 
 # High level Isaac sim APIs
-import omni.usd
 from omni.usd import get_stage_next_free_path
 import isaacsim.core.utils.stage as stage_utils
-from isaacsim.core.prims import RigidPrim
-
-import carb
-
-from omni.isaac.cloner import GridCloner
-from omni.isaac.core.prims import XFormPrimView
+from isaacsim.core.prims import RigidPrim, XFormPrim
+from isaacsim.core.simulation_manager import SimulationManager, IsaacEvents
+from isaacsim.core.cloner import GridCloner
 
 # Extension APIs
 from pegasus.simulator.logic.state_batch import StateBatch
@@ -27,8 +30,8 @@ from pegasus.simulator.logic.vehicle_manager import VehicleManager
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.transforms import quaternion_apply, quaternion_invert
 
-
-from isaacsim.core.simulation_manager import SimulationManager, IsaacEvents
+# Debug purposes
+import carb
 
 
 class VehicleBatch():
@@ -41,14 +44,14 @@ class VehicleBatch():
         vehicle_batch_id: int,
         usd_path: str,
         n_vehicles: int = 1,
-        init_pos=None,
-        init_orientation=None,
-        sensors=[],
-        graphical_sensors=[],
-        graphs=[],
-        backends=[],
+        init_pos: torch.Tensor | None = None,
+        init_orientation: torch.Tensor | None = None,
+        sensors: Sequence[Any] | None = None,
+        graphical_sensors: Sequence[Any] | None = None,
+        graphs: Sequence[Any] | None = None,
+        backends: Sequence[Any] | None = None,
         spacing: float = 3.0
-    ):
+    )-> None:
         """
         Initialize a batch of vehicles in the current Isaac Sim stage.
 
@@ -56,14 +59,18 @@ class VehicleBatch():
             stage_prefix (str): Base path used when spawning the vehicle instances.
             usd_path (str): Path to the USD file that defines the vehicle model.
             n_vehicles (int): Number of vehicles to spawn in the batch.
-            init_pos (list, optional): Initial positions of the vehicles in the inertial frame using the ENU convention. If None, vehicles are spawned using a grid layout.
-            init_orientation (list, optional): Initial vehicle orientations as quaternions in the format [qw, qx, qy, qz].
+            init_pos (torch.Tensor | None, optional): Initial positions of the vehicles in the inertial frame using the ENU convention. If None, vehicles are spawned using a grid layout.
+            init_orientation (torch.Tensor | None, optional): Initial vehicle orientations as quaternions in the format [qw, qx, qy, qz].
             sensors (list, optional): List of physics-based sensors attached to the vehicles.
             graphical_sensors (list, optional): List of graphical sensors attached to the vehicles.
             graphs (list, optional): List of graphs associated with the vehicles.
             backends (list, optional): List of communication or control backends.
             spacing (float): Distance between vehicles when using automatic grid spawning.
         """        
+        if n_vehicles <= 0:
+            raise ValueError("n_vehicles must be greater than zero")
+        if spacing <= 0.0:
+            raise ValueError("spacing must be greater than zero")
 
         # Define the same device that is running the simulation
         self._device = PegasusInterface()._world_settings["device"]
@@ -73,24 +80,21 @@ class VehicleBatch():
         self._stage = self._world.stage
             
         # Save the base stage prefix for the batch and the USD file that defines the vehicle model
-        #self._stage_prefix = get_stage_next_free_path(self._stage, stage_prefix, False)
-
         base_stage_prefix = stage_prefix.rstrip("/")
-        self._batch_root = get_stage_next_free_path(self._stage, f"{base_stage_prefix}_batch_{vehicle_batch_id}", False)
 
+        self._vehicle_batch_id = vehicle_batch_id
+        self._batch_root = get_stage_next_free_path(self._stage, f"{base_stage_prefix}_batch_{vehicle_batch_id}", False)
         self._stage_prefix = f"{self._batch_root}/env"
         
         self._usd_file = usd_path
         self._n_vehicles = n_vehicles
-
         self._vehicle_name = self._stage_prefix.rpartition("/")[-1]
 
         # Spawn the batch of vehicles in the world stage
         self._spawn_batch(init_pos, init_orientation, spacing)
 
-        self._parts_per_vehicle = None
-        
-        self._body_index = None
+        self._parts_per_vehicle: int | None = None
+        self._body_index: int | None = None
 
         # Create a batched view over all rigid prims belonging to the vehicles
         self._vehicle_expr = f"{self._stage_prefix}.*/.*"
@@ -100,8 +104,8 @@ class VehicleBatch():
         # Variable that stores the current batched state of the vehicles
         self._state = StateBatch(self.n_vehicles, self.device)
 
-        self._last_forces_local = None
-        self._last_torques_local = None
+        self._last_forces_local: torch.Tensor | None = None
+        self._last_torques_local: torch.Tensor | None = None
 
         # Register callback executed before each physics step. 
         # This method should be implemented in classes that inherit the vehicle object.
@@ -113,13 +117,16 @@ class VehicleBatch():
         # Set the flag that signals if the simulation is running or not
         self._sim_running = False
 
+        # Set variable that control if the batch is already closed
+        self._closed = False
+
         # Add a callback to start/stop of the simulation once the play/stop button is hit
         self._world.add_timeline_callback(self._stage_prefix + "/start_stop_sim", self.sim_start_stop)
 
         # --------------------------------------------------------------------
         # -------------------- Add sensors to the vehicle --------------------
         # --------------------------------------------------------------------
-        #self._sensors = sensors
+        #self._sensors = tuple(sensors or ())
         
         #for sensor in self._sensors:
         #    sensor.initialize(
@@ -136,7 +143,7 @@ class VehicleBatch():
         # --------------------------------------------------------------------
         # -------------------- Add the graphical sensors to the vehicle ------
         # --------------------------------------------------------------------
-        #self._graphical_sensors = graphical_sensors
+        #self._graphical_sensors = tuple(graphical_sensors or ())
 
         #for graphical_sensor in self._graphical_sensors:
         #    graphical_sensor.initialize(self)
@@ -148,7 +155,7 @@ class VehicleBatch():
         # --------------------------------------------------------------------
         # -------------------- Add the graphs to the vehicle -----------------
         # --------------------------------------------------------------------
-        #self._graphs = graphs
+        #self._graphs = tuple(graphs or ())
 
         #for graph in self._graphs:
         #    graph.initialize(self)
@@ -156,14 +163,27 @@ class VehicleBatch():
         # --------------------------------------------------------------------
         # ---- Add (communication/control) backends to the vehicle -----------
         # --------------------------------------------------------------------
-        self._backends = backends
+        self._backends = tuple(backends or ())
 
 
-    def initialize(self):
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def initialize(self) -> None:
         """
         Initialize the vehicle prim handles and allocate batched state tensors.
         """
         self._vehicle_prims.initialize()
+        self._root_prims.initialize()
+
+        # capture _init_pos and _init_orientation from the /body prim after world.reset() so it matches state.position (which also comes from _root_prims)
+        init_pos, init_orientation = self._root_prims.get_world_poses()
+        self._init_pos = torch.as_tensor(init_pos, dtype=torch.float32, device=self.device)
+        self._init_orientation = torch.as_tensor(init_orientation, dtype=torch.float32, device=self.device)
+
+        if self._vehicle_prims.count % self._n_vehicles != 0:
+            raise RuntimeError(f"Rigid prim count ({self._vehicle_prims.count}) is not divisible by " f"n_vehicles ({self._n_vehicles})")
 
         self._parts_per_vehicle = self._vehicle_prims.count // self._n_vehicles
 
@@ -172,15 +192,11 @@ class VehicleBatch():
 
         print(f"Spawned {self._n_vehicles} vehicles with {self._parts_per_vehicle} parts each (total {self._vehicle_prims.count} prims)")
 
-        self._body_index = next((i for i, p in enumerate(self._vehicle_prims.prim_paths[:self._parts_per_vehicle]) if p.endswith("/body")), None)
+        self._body_index = next((index for index, path in enumerate(self._vehicle_prims.prim_paths[:self._parts_per_vehicle]) if path.endswith("/body")), None)
 
-        # Root prim view - one prim per vehicle (the articulation root).
-        # Used by ResetManager to teleport vehicles without touching non-root articulation links, which PhysX does not allow to be set directly.
-        # Expression: "{stage_prefix}_*/body" matches quadrotor_0/body, quadrotor_1/body, ...
-        self._root_prims = RigidPrim(prim_paths_expr = f"{self._stage_prefix}.*/body", name = f"{self._vehicle_name}_roots")
-
-        self._root_prims.initialize()
-
+        if self._body_index is None:
+            raise RuntimeError(f"No '/body' prim found in the first vehicle under {self._stage_prefix}")
+        
         self._allocate_batch_state()
 
         #Initialize the backends
@@ -188,8 +204,87 @@ class VehicleBatch():
             backend.initialize(self)
 
 
+    def close(self) -> None:
+        """
+        Release callbacks and unregister this batch.
+        """
+        if self._closed:
+            return
 
-    def _spawn_batch(self, init_pos=None, init_orientation=None, spacing=2.5):
+        SimulationManager.deregister_callback(self._cb_pre)
+        SimulationManager.deregister_callback(self._cb_post)
+        VehicleManager.get_vehicle_manager().remove_vehicle(self._stage_prefix)
+
+        self._closed = True
+    
+
+    def __del__(self) -> None:
+        """
+        Method called when the vehicle batch object is destroyed.
+        When this happens, the batch is also removed from the VehicleManager.
+        """
+        try:
+            self.close()
+        except Exception:
+            pass
+
+
+    def sim_start_stop(self, event) -> None:
+        """
+        Callback called whenever a timeline event occurs, such as starting or stopping the simulation.
+
+        Args:
+            event: A timeline event generated from Isaac Sim, such as starting or stoping the simulation.
+        """
+
+        # If the start/stop button was pressed, then call the start and stop methods accordingly
+        if self._world.is_playing() and self._sim_running == False:
+            # Initialize the sensors
+            #for sensor in self._sensors:
+            #    sensor.start()
+
+            # Initialize the graphical sensors
+            #for graphical_sensor in self._graphical_sensors:
+            #    graphical_sensor.start()
+
+            carb.log_info(f"Simulation started for vehicle batch {self.vehicle_name}.")
+
+            # Invoke the start method of the vehicle (if it exists)
+            self.start()
+
+            # Intializes communication with all backends. This method is invoked automatically when the simulation starts
+            for backend in self._backends:
+                backend.start()
+
+            self._sim_running = True
+
+        if self._world.is_stopped() and self._sim_running == True:
+            self._sim_running = False
+
+            # Stop the sensors
+            #for sensor in self._sensors:
+            #    sensor.stop()
+
+            # Stop the graphical sensors
+            #for graphical_sensor in self._graphical_sensors:
+            #    graphical_sensor.stop()
+
+            # Signal all backends that the simulation has stopped. This method is invoked automatically when the simulation stops
+            for backend in self._backends:
+                backend.stop()
+
+            self.stop()
+
+    # ------------------------------------------------------------------
+    # Spawn and state allocation
+    # ------------------------------------------------------------------
+
+    def _spawn_batch(
+        self,
+        init_pos: torch.Tensor | None,
+        init_orientation: torch.Tensor | None,
+        spacing: float,
+    ) -> None:
         """
         This method spawns a batch of vehicles in the simulation stage.
 
@@ -251,7 +346,7 @@ class VehicleBatch():
             cloner.clone(source_prim_path=f"{self._stage_prefix}_0", prim_paths=target_paths, replicate_physics=True, copy_from_source=True, base_env_path=self._batch_root, root_path=f"{self._stage_prefix}_", enable_env_ids=True)
 
         # Create a view over the root prim of each vehicle
-        vehicles = XFormPrimView(prim_paths_expr=f"{self._stage_prefix}.*/")
+        vehicles = XFormPrim(prim_paths_expr=f"{self._stage_prefix}.*/")
 
         # Retrieve the world poses of the spawned vehicles
         set_init_pos, set_init_orientation = vehicles.get_world_poses()
@@ -262,10 +357,33 @@ class VehicleBatch():
         vehicles.set_world_poses(set_init_pos, set_init_orientation)
 
         # Store them as tensors for later use
-        self._init_pos = torch.as_tensor(set_init_pos, dtype=torch.float32, device=self.device)
-        self._init_orientation = torch.as_tensor(set_init_orientation, dtype=torch.float32, device=self.device)
+        self._init_pos = torch.as_tensor(set_init_pos, dtype=torch.float32, device=self.device).clone()
+        self._init_orientation = torch.as_tensor(set_init_orientation, dtype=torch.float32, device=self.device).clone()
 
         #print(f"Initialized {self.n_vehicles} vehicles at positions: {self.init_pos} and orientations: {self.init_orientation}")
+
+
+    def disable_collisions(self) -> None:
+        """Disable collisions on every collider prim of this vehicle batch.
+
+        Walks the batch's USD subtree and sets collisionEnabled=False on every
+        prim that exposes the UsdPhysics CollisionAPI. Useful when several
+        vehicle batches are spawned overlapping in space.
+        """
+        root = self._stage.GetPrimAtPath(self._batch_root)
+        if not root or not root.IsValid():
+            carb.log_warn(f"[VehicleBatch] disable_collisions: root '{self._batch_root}' not found.")
+            return
+        count = 0
+        for prim in Usd.PrimRange(root):
+            if prim.HasAPI(UsdPhysics.CollisionAPI):
+                api = UsdPhysics.CollisionAPI(prim)
+                attr = api.GetCollisionEnabledAttr()
+                if not attr:
+                    attr = api.CreateCollisionEnabledAttr()
+                attr.Set(False)
+                count += 1
+        carb.log_warn(f"[VehicleBatch] Disabled collisions on {count} prim(s) under {self._batch_root}.")
 
 
     def _allocate_batch_state(self):
@@ -284,22 +402,191 @@ class VehicleBatch():
         self._state.angular_velocity = zeros3.clone()
         self._state.linear_acceleration = zeros3.clone()
 
-    def __del__(self):
+    # ------------------------------------------------------------------
+    # Physics and state
+    # ------------------------------------------------------------------
+    
+    def apply_forces_and_torques_all_parts(self, forces: torch.Tensor, torques: torch.Tensor) -> None:
         """
-        Method called when the vehicle batch object is destroyed.
+        Method that apply forces and torques to all rigid parts matched by the batch view.
 
-        When this happens, the batch is also removed from the VehicleManager.
+        Args:
+            forces: Tensor of shape (n_vehicles, n_parts_per_vehicle, 3) or flattened shape (n_total_parts, 3).
+            torques: Tensor of shape (n_vehicles, n_parts_per_vehicle, 3) or flattened shape (n_total_parts, 3).
         """
 
-        SimulationManager.deregister_callback(self._cb_pre)
-        SimulationManager.deregister_callback(self._cb_post)
+        forces = forces.reshape((self._vehicle_prims.count, 3))
+        
+        torques = torques.reshape((self._vehicle_prims.count, 3))
 
-        # Remove this batch object from the VehicleManager
-        VehicleManager.get_vehicle_manager().remove_vehicle(self._stage_prefix)
+        #print("Applying forces:", forces)
+        #print("Applying torques:", torques)
 
-    """
-    Properties
-    """
+        if self._parts_per_vehicle is not None:
+            self._last_forces_local = forces.reshape(self._n_vehicles, self._parts_per_vehicle, 3).detach().clone()
+            self._last_torques_local = torques.reshape(self._n_vehicles, self._parts_per_vehicle, 3).detach().clone()
+
+        # Apply the force to the rigidbody. The force should be expressed in the rigidbody frame (is_global=False)
+        # Note that the mapping between tensor rows and prim paths follows self._vehicle_prims.prim_paths order
+        self._vehicle_prims.apply_forces_and_torques_at_pos(forces, torques, is_global=False)
+
+
+    def update_state(self, dt: float) -> None:
+        """
+        Callback called at every physics step to retrieve and update the current batched vehicle state.
+
+        The state of each vehicle is defined with respect to its body prim.
+        """
+        
+        if self._sim_running == False:
+            return
+                
+        # Get the current position of the body in the inertial frame and its orientation relative to the inertial frame
+        positions, orientations = self._root_prims.get_world_poses()
+
+        # The linear velocity [x_dot, y_dot, z_dot] of the vehicle's body frame expressed in the inertial frame of reference
+        linear_vel = self._root_prims.get_linear_velocities()
+
+        # Get the angular velocity of the vehicle expressed in the body frame of reference
+        angular_vel = self._root_prims.get_angular_velocities()
+
+        # Get the linear acceleration of the body relative to the inertial frame, expressed in the inertial frame
+        # Note: we must do this approximation, since the Isaac sim does not output the acceleration of the rigid body directly
+        if dt > 0.0:
+            linear_acceleration = (torch.as_tensor(linear_vel, dtype=torch.float32, device=self._device) - self._state.linear_velocity) / dt
+        else:
+            linear_acceleration = torch.zeros_like(torch.as_tensor(linear_vel, dtype=torch.float32, device=self._device))
+
+        # Update the state — use .clone() so state tensors own their storage and
+        # are never dangling views into PhysX buffers that get freed on stage reload.
+        self._state.position = torch.as_tensor(positions, dtype=torch.float32, device=self._device).clone()
+        self._state.attitude = torch.as_tensor(orientations, dtype=torch.float32, device=self._device).clone()
+
+        # Express the velocity of the vehicle in the inertial frame X_dot = [x_dot, y_dot, z_dot]
+        self._state.linear_velocity = torch.as_tensor(linear_vel, dtype=torch.float32, device=self._device).clone()
+
+        # The linear velocity V =[u,v,w] of the vehicle's body frame expressed in the body frame of reference
+        # Note that: x_dot = Rot * V
+        self._state.linear_body_velocity = quaternion_apply(quaternion_invert(self._state.attitude), self._state.linear_velocity)
+
+        # omega = [p,q,r], expressed in the body frame of reference
+        self._state.angular_velocity = quaternion_apply(quaternion_invert(self._state.attitude), torch.as_tensor(angular_vel, dtype=torch.float32, device=self._device).clone())
+
+        # The acceleration of the vehicle expressed in the inertial frame X_ddot = [x_ddot, y_ddot, z_ddot]
+        self._state.linear_acceleration = linear_acceleration
+
+        for backend in self._backends:
+            backend.update_state(self._state)
+
+
+    def set_state_batch(
+        self,
+        env_ids: torch.Tensor,
+        positions: torch.Tensor,
+        attitudes: torch.Tensor,
+        linear_velocity: torch.Tensor | None = None, # expressed in the inertial frame
+        angular_velocity: torch.Tensor | None = None,   # expressed in the body frame
+    ) -> None:
+        """
+        Synchronize the cached vehicle state after an external reset.
+        """
+
+        if env_ids.numel() == 0:
+            return
+
+        env_ids = env_ids.to(device=self.device, dtype=torch.long)
+
+        if linear_velocity is None:
+            linear_velocity = torch.zeros((env_ids.numel(), 3), device=self.device, dtype=torch.float32)
+
+        if angular_velocity is None:
+            angular_velocity = torch.zeros((env_ids.numel(), 3), device=self.device, dtype=torch.float32)
+
+        positions = positions.to(device=self.device, dtype=torch.float32)
+        attitudes = attitudes.to(device=self.device, dtype=torch.float32)
+        linear_velocity = linear_velocity.to(device=self.device, dtype=torch.float32)
+        angular_velocity = angular_velocity.to(device=self.device, dtype=torch.float32)
+
+        self._state.position[env_ids] = positions
+        self._state.attitude[env_ids] = attitudes
+
+        self._state.linear_velocity[env_ids] = linear_velocity
+
+        self._state.linear_body_velocity[env_ids] = quaternion_apply(quaternion_invert(attitudes), linear_velocity)
+
+        self._state.angular_velocity[env_ids] = angular_velocity
+
+        self._state.linear_acceleration[env_ids] = 0.0
+
+        for backend in self._backends:
+            backend.set_state(
+                env_ids=env_ids,
+                positions=positions,
+                attitudes=attitudes,
+                linear_velocity=self._state.linear_velocity[env_ids],
+                angular_velocity=self._state.angular_velocity[env_ids],
+            )
+
+    
+    # ------------------------------------------------------------------
+    # Optional legacy sensor forwarding
+    # ------------------------------------------------------------------
+
+    def update_sensors(self, dt: float):
+        """Callback that is called at every physics steps and will call the sensor.update method to generate new
+        sensor data. For each data that the sensor generates, the backend.update_sensor method will also be called for
+        every backend. For example, if new data is generated for an IMU and we have a PX4MavlinkBackend, then the update_sensor
+        method will be called for that backend so that this data can latter be sent thorugh mavlink.
+
+        Args:
+            dt (float): The time elapsed between the previous and current function calls (s).
+        """
+
+        # Call the update method for the sensor to update its values internally (if applicable)
+        for sensor in self._sensors:
+            sensor_data = sensor.update(self._state, dt)
+
+            # If some data was updated and we have a mavlink backend or ros backend (or other), then just update it
+            if sensor_data is not None:
+                for backend in self._backends:
+                    backend.update_sensor(sensor.sensor_type, sensor_data)
+
+
+    def update_graphical_sensors(self, event):
+        """Callback that is called at every rendering steps and will call the graphical_sensor.update method to generate new
+        sensor data. For each data that the sensor generates, the backend.update_graphical_sensor method will also be called for
+        every backend. For example, if new data is generated for a monocular camera and we have a ROS2Backend, then the update_graphical_sensor
+        method will be called for that backend so that this data can latter be sent through a ROS2 topic.
+
+        Args:
+            event (float): The timer event that contains the time elapsed between the previous and current function calls (s).
+        """
+
+        # Call the update method for the sensor to update its values internally (if applicable)
+        for sensor in self._graphical_sensors:
+            sensor_data = sensor.update(self._state, event.payload['dt'])
+
+            # If some data was updated and we have a ros backend (or other), then just update it
+            if sensor_data is not None:
+                for backend in self._backends:
+                    backend.update_graphical_sensor(sensor.sensor_type, sensor_data)
+
+
+    # ------------------------------------------------------------------
+    # Helpers and API
+    # ------------------------------------------------------------------
+
+    def get_batch_layout_info(self) -> dict[str, Any]:
+        """
+        Return structural information about the current batch view.
+        """
+        return {
+            "vehicle_prefix": self._stage_prefix,
+            "n_vehicles": self._n_vehicles,
+            "n_parts_per_vehicle": self._parts_per_vehicle,
+            "n_total_prims": self._vehicle_prims.count,
+            "prim_paths": list(self._vehicle_prims.prim_paths),
+        }
 
     @property
     def state(self):
@@ -339,219 +626,22 @@ class VehicleBatch():
         """The index of the body prim for each vehicle in the batch."""
         return self._body_index
 
-    """
-    Operations
-    """
-
-    def sim_start_stop(self, event):
-        """
-        Callback called whenever a timeline event occurs, such as starting or stopping the simulation.
-
-        Args:
-            event: A timeline event generated from Isaac Sim, such as starting or stoping the simulation.
-        """
-
-        # If the start/stop button was pressed, then call the start and stop methods accordingly
-        if self._world.is_playing() and self._sim_running == False:
-            # Initialize the sensors
-            #for sensor in self._sensors:
-            #    sensor.start()
-
-            # Initialize the graphical sensors
-            #for graphical_sensor in self._graphical_sensors:
-            #    graphical_sensor.start()
-
-            carb.log_info(f"Simulation started for vehicle batch {self.vehicle_name}.")
-
-            # Invoke the start method of the vehicle (if it exists)
-            self.start()
-
-            # Intializes communication with all backends. This method is invoked automatically when the simulation starts
-            for backend in self._backends:
-                backend.start()
-
-            self._sim_running = True
-
-
-        if self._world.is_stopped() and self._sim_running == True:
-            self._sim_running = False
-
-            # Stop the sensors
-            #for sensor in self._sensors:
-            #    sensor.stop()
-
-            # Stop the graphical sensors
-            #for graphical_sensor in self._graphical_sensors:
-            #    graphical_sensor.stop()
-
-            # Signal all backends that the simulation has stopped. This method is invoked automatically when the simulation stops
-            for backend in self._backends:
-                backend.stop()
-
-            self.stop()
-
-
-    def apply_forces_and_torques_all_parts(self, forces, torques):
-        """
-        Method that apply forces and torques to all rigid parts matched by the batch view.
-
-        Args:
-            forces: Tensor of shape (n_vehicles, n_parts_per_vehicle, 3) or flattened shape (n_total_parts, 3).
-            torques: Tensor of shape (n_vehicles, n_parts_per_vehicle, 3) or flattened shape (n_total_parts, 3).
-
-        Notes:
-            - Forces/torques are applied in the local body frame when is_global=False.
-            - The mapping between tensor rows and prim paths follows self._vehicle_prims.prim_paths order.
-        """
-
-        forces = forces.reshape((self._vehicle_prims.count, 3))
-        
-        torques = torques.reshape((self._vehicle_prims.count, 3))
-
-        #print("Applying forces:", forces)
-        #print("Applying torques:", torques)
-
-        if self._parts_per_vehicle is not None:
-            self._last_forces_local = forces.reshape(self._n_vehicles, self._parts_per_vehicle, 3).detach().clone()
-            self._last_torques_local = torques.reshape(self._n_vehicles, self._parts_per_vehicle, 3).detach().clone()
-
-        # Apply the force to the rigidbody. The force should be expressed in the rigidbody frame
-        self._vehicle_prims.apply_forces_and_torques_at_pos(forces, torques, is_global=False)
-
-    def get_batch_layout_info(self):
-        """
-        Return structural information about the current batch view.
-        """
-
-        return {
-            "vehicle_prefix": self._stage_prefix,
-            "n_vehicles": self._n_vehicles,
-            "n_parts_per_vehicle": self._parts_per_vehicle,
-            "n_total_prims": self._vehicle_prims.count,
-            "prim_paths": list(self._vehicle_prims.prim_paths),
-        }
-
-
-    def update_state(self, dt: float):
-        """
-        Callback called at every physics step to retrieve and update the current batched vehicle state.
-
-        The state of each vehicle is defined with respect to its body prim.
-        """
-        
-        if self._sim_running == False:
-            return
-                
-        # Get the positions, orientations, linear velocities, and angular velocities of all vehicle prims in the inertial frame of reference   
-        prims_positions, prims_orientations = self._vehicle_prims.get_world_poses()
-        prims_linear_vel = self._vehicle_prims.get_linear_velocities()
-        prims_angular_vel = self._vehicle_prims.get_angular_velocities()
-
-        # Reshape from (n_vehicles * parts_per_vehicle, 3) to (n_vehicles, parts_per_vehicle, 3)
-        prims_positions = torch.as_tensor(prims_positions, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 3)
-        prims_orientations = torch.as_tensor(prims_orientations, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 4)
-        prims_linear_vel = torch.as_tensor(prims_linear_vel, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 3)
-        prims_angular_vel = torch.as_tensor(prims_angular_vel, dtype=torch.float32, device=self._device).reshape(self._n_vehicles, self._parts_per_vehicle, 3)
-
-        # Use the body prim of each vehicle as the reference frame for the state
-
-        # Get the current position of the body in the inertial frame and its orientation relative to the inertial frame
-        positions = prims_positions[:, self._body_index, :]
-        orientations = prims_orientations[:, self._body_index, :]
-
-        # The linear velocity [x_dot, y_dot, z_dot] of the vehicle's body frame expressed in the inertial frame of reference
-        linear_vel = prims_linear_vel[:, self._body_index, :]
-        
-        # Get the angular velocity of the vehicle expressed in the body frame of reference
-        angular_vel = prims_angular_vel[:, self._body_index, :]
-
-        # Get the linear acceleration of the body relative to the inertial frame, expressed in the inertial frame
-        # Note: we must do this approximation, since the Isaac sim does not output the acceleration of the rigid body directly
-        if dt > 0.0:
-            linear_acceleration = (linear_vel - self._state.linear_velocity) / dt
-        else:
-            linear_acceleration = torch.zeros_like(linear_vel)
-
-        # Update the state
-        self._state.position = positions
-        self._state.attitude = orientations
-
-        # Express the velocity of the vehicle in the inertial frame X_dot = [x_dot, y_dot, z_dot]
-        self._state.linear_velocity = linear_vel
-
-        # The linear velocity V =[u,v,w] of the vehicle's body frame expressed in the body frame of reference
-        # Note that: x_dot = Rot * V
-        self._state.linear_body_velocity = quaternion_apply(quaternion_invert(self._state.attitude), self._state.linear_velocity)
-
-        # omega = [p,q,r], expressed in the body frame of reference
-        self._state.angular_velocity = quaternion_apply(quaternion_invert(self._state.attitude), angular_vel)
-
-        # The acceleration of the vehicle expressed in the inertial frame X_ddot = [x_ddot, y_ddot, z_ddot]
-        self._state.linear_acceleration = linear_acceleration
-
-        for backend in self._backends:
-            backend._vehicle = self
-            backend.update_state(self._state)
-
-    def set_state_batch(
-        self,
-        env_ids: torch.Tensor,
-        positions: torch.Tensor,
-        attitudes: torch.Tensor,
-        linear_velocity: torch.Tensor | None = None,
-        angular_velocity: torch.Tensor | None = None,
-    ):
-        if env_ids.numel() == 0:
-            return
-
-        env_ids = env_ids.to(device=self.device, dtype=torch.long)
-
-        if linear_velocity is None:
-            linear_velocity = torch.zeros((env_ids.numel(), 3), device=self.device, dtype=torch.float32)
-
-        if angular_velocity is None:
-            angular_velocity = torch.zeros((env_ids.numel(), 3), device=self.device, dtype=torch.float32)
-
-        positions = positions.to(device=self.device, dtype=torch.float32)
-        attitudes = attitudes.to(device=self.device, dtype=torch.float32)
-        linear_velocity = linear_velocity.to(device=self.device, dtype=torch.float32)
-        angular_velocity = angular_velocity.to(device=self.device, dtype=torch.float32)
-
-        self._state.position[env_ids] = positions
-        self._state.attitude[env_ids] = attitudes
-
-        self._state.linear_velocity[env_ids] = linear_velocity
-
-        self._state.linear_body_velocity[env_ids] = quaternion_apply(quaternion_invert(attitudes), linear_velocity)
-
-        self._state.angular_velocity[env_ids] = angular_velocity
-
-        self._state.linear_acceleration[env_ids] = 0.0
-
-        for backend in self._backends:
-            if hasattr(backend, "set_state"):
-                backend.set_state(
-                    env_ids=env_ids,
-                    positions=positions,
-                    attitudes=attitudes,
-                    linear_velocity=self._state.linear_velocity[env_ids],
-                    angular_velocity=self._state.angular_velocity[env_ids],
-                )
-
-
-    def start(self):
+    @abstractmethod
+    def start(self) -> None:
         """
         Method that should be implemented by the class that inherits the vehicle object.
         """
         pass
 
-    def stop(self):
+    @abstractmethod
+    def stop(self) -> None:
         """
         Method that should be implemented by the class that inherits the vehicle object.
         """
         pass
 
-    def update(self, dt: float):
+    @abstractmethod
+    def update(self, dt: float) -> None:
         """
         Method that computes and applies the forces to the vehicle insimulation. 
         This method must be implemented by a class that inherits this type and it's called periodically by the physics engine.
@@ -560,44 +650,3 @@ class VehicleBatch():
             dt (float): The time elapsed between the previous and current function calls (s).
         """
         pass
-
-
-    def update_sensors(self, dt: float):
-        """Callback that is called at every physics steps and will call the sensor.update method to generate new
-        sensor data. For each data that the sensor generates, the backend.update_sensor method will also be called for
-        every backend. For example, if new data is generated for an IMU and we have a PX4MavlinkBackend, then the update_sensor
-        method will be called for that backend so that this data can latter be sent thorugh mavlink.
-
-        Args:
-            dt (float): The time elapsed between the previous and current function calls (s).
-        """
-
-        # Call the update method for the sensor to update its values internally (if applicable)
-        for sensor in self._sensors:
-            sensor_data = sensor.update(self._state, dt)
-
-            # If some data was updated and we have a mavlink backend or ros backend (or other), then just update it
-            if sensor_data is not None:
-                for backend in self._backends:
-                    backend._vehicle = self
-                    backend.update_sensor(sensor.sensor_type, sensor_data)
-
-    def update_graphical_sensors(self, event):
-        """Callback that is called at every rendering steps and will call the graphical_sensor.update method to generate new
-        sensor data. For each data that the sensor generates, the backend.update_graphical_sensor method will also be called for
-        every backend. For example, if new data is generated for a monocular camera and we have a ROS2Backend, then the update_graphical_sensor
-        method will be called for that backend so that this data can latter be sent through a ROS2 topic.
-
-        Args:
-            event (float): The timer event that contains the time elapsed between the previous and current function calls (s).
-        """
-
-        # Call the update method for the sensor to update its values internally (if applicable)
-        for sensor in self._graphical_sensors:
-            sensor_data = sensor.update(self._state, event.payload['dt'])
-
-            # If some data was updated and we have a ros backend (or other), then just update it
-            if sensor_data is not None:
-                for backend in self._backends:
-                    backend._vehicle = self
-                    backend.update_graphical_sensor(sensor.sensor_type, sensor_data)

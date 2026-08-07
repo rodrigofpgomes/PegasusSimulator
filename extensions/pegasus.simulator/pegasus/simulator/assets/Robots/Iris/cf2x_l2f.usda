@@ -1,0 +1,124 @@
+#usda 1.0
+(
+    customLayerData = {
+        dictionary cameraSettings = {
+            dictionary Front = {
+                double3 position = (5, 0, 0)
+                double radius = 5
+            }
+            dictionary Perspective = {
+                double3 position = (5, 5, 5)
+                double3 target = (-3.978038431995401e-8, -3.978038254359717e-8, 7.956076863990802e-8)
+            }
+            dictionary Right = {
+                double3 position = (0, -5, 0)
+                double radius = 5
+            }
+            dictionary Top = {
+                double3 position = (0, 0, 5)
+                double radius = 5
+            }
+            string boundCamera = "/OmniverseKit_Persp"
+        }
+        dictionary omni_layer = {
+            string authoring_layer = "./cf2x_l2f.usda"
+        }
+        dictionary renderSettings = {
+        }
+    }
+    defaultPrim = "crazyflie"
+    metersPerUnit = 1
+    subLayers = [
+        @./cf2x.usda@
+    ]
+    upAxis = "Z"
+)
+
+over "crazyflie"
+{
+    over "body"
+    {
+        point3f physics:centerOfMass = (0, 0, 0)
+        float3 physics:diagonalInertia = (0.00000385, 0.00000385, 0.0000059675)
+        float physics:mass = 0.027
+
+        over "body_collision"
+        {
+            over "geometry"
+            {
+                bool physics:collisionEnabled = 0
+            }
+        }
+    }
+
+    over "m1_prop"
+    {
+        float physics:mass = 0.000001
+        double3 xformOp:translate = (0.028, -0.028, 0.021)
+
+        over "ccw_prop"
+        {
+            bool physics:collisionEnabled = 0
+        }
+    }
+
+    over "m2_prop"
+    {
+        float physics:mass = 0.000001
+        double3 xformOp:translate = (-0.028, -0.028, 0.021)
+
+        over "cw_prop" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxCollisionAPI", "PhysxConvexHullCollisionAPI", "PhysicsMeshCollisionAPI"]
+        )
+        {
+            uniform token physics:approximation = "convexHull"
+            bool physics:collisionEnabled = 0
+        }
+    }
+
+    over "m3_prop"
+    {
+        float physics:mass = 0.000001
+        double3 xformOp:translate = (-0.028, 0.028, 0.021)
+
+        over "ccw_prop" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxCollisionAPI", "PhysxConvexHullCollisionAPI", "PhysicsMeshCollisionAPI"]
+        )
+        {
+            uniform token physics:approximation = "convexHull"
+            bool physics:collisionEnabled = 0
+        }
+    }
+
+    over "m4_prop"
+    {
+        float physics:mass = 0.000001
+        double3 xformOp:translate = (0.028, 0.028, 0.021)
+
+        over "cw_prop" (
+            prepend apiSchemas = ["PhysicsCollisionAPI", "PhysxCollisionAPI", "PhysxConvexHullCollisionAPI", "PhysicsMeshCollisionAPI"]
+        )
+        {
+            uniform token physics:approximation = "convexHull"
+            bool physics:collisionEnabled = 0
+        }
+    }
+}
+
+over "Render"
+{
+    over "OmniverseKit"
+    {
+        over "HydraTextures"
+        {
+            over "omni_kit_widget_viewport_ViewportTexture_0"
+            {
+                rel camera = </OmniverseKit_Persp>
+                rel orderedVars = </Render/Vars/LdrColor>
+                custom bool overrideClipRange = 0
+                uniform int2 resolution = (1239, 654)
+            }
+        }
+    }
+}
+

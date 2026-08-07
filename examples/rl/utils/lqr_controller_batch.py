@@ -23,7 +23,7 @@ class LQRBackendCfg():
     """Configuration for the Quadcopter Environment."""
 
     # Vehicle Params
-    angular_damping: float = 0.5
+    angular_damping: float = 2.0 #0.5
     drone_mass: float = 1.5 
     gravity: float = 9.81 
 

@@ -1,0 +1,4 @@
+env_id,episode_id,end_global_step,length_steps,duration_s,reason
+0,0,2000,2000,20.0,terminated
+0,1,4000,2000,20.0,terminated
+0,2,6000,2000,20.0,terminated

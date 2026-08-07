@@ -1,0 +1,10 @@
+{
+  "vehicle": "iris",
+  "vehicles": [
+    { "name": "raptor",   "type": "raptor",   "checkpoint": null },
+    { "name": "pretrain", "type": "pretrain", "checkpoint": "/path/to/pretrain.hdf5" },
+    { "name": "sac",      "type": "sac",      "checkpoint": "/path/to/sac/best_agent.pt" },
+    { "name": "sac_skrl", "type": "sac_skrl", "checkpoint": "/path/to/sac/best_agent.pt", "task": "raptor_pretrain", "preset": "isaac_lab" },
+    { "name": "ppo",      "type": "ppo",      "checkpoint": "/path/to/ppo/best_agent.pt", "task": "raptor_pretrain", "preset": "isaac_lab" }
+  ]
+}

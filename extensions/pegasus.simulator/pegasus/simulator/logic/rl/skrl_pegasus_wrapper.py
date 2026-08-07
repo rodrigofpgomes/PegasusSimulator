@@ -36,26 +36,17 @@ class PegasusSkrlWrapper:
     @property
     def observation_space(self):
         """Returns the policy's observation space."""
-        try:
-            return self._unwrapped.single_observation_space["policy"]
-        except Exception:
-            return self._unwrapped.observation_space
+        return self._unwrapped.observation_space
 
     @property
     def action_space(self):
         """Returns the environment's action space."""
-        try:
-            return self._unwrapped.single_action_space
-        except Exception:
-            return self._unwrapped.action_space
+        return self._unwrapped.action_space
 
     @property
     def state_space(self):
         """Returns the critic's state space, if available."""
-        try:
-            return self._unwrapped.single_observation_space["critic"]
-        except Exception:
-            return getattr(self._unwrapped, "state_space", None)
+        return getattr(self._unwrapped, "state_space", None)
 
     @property
     def unwrapped(self):
@@ -74,6 +65,9 @@ class PegasusSkrlWrapper:
             observations, reward, terminated, truncated, self._info = self._env.step(actions)
 
         self._observations = flatten_tensorized_space(tensorize_space(self.observation_space, observations["policy"]))
+
+        if "final_observation" in self._info: 
+            self._info["final_observation"] = flatten_tensorized_space(tensorize_space(self.observation_space, self._info["final_observation"]))
 
         states = observations.get("critic", None)
         self._states = flatten_tensorized_space(tensorize_space(self.state_space, states)) if states is not None and self.state_space is not None else None

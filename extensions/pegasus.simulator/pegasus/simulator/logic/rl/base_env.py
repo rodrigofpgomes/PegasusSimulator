@@ -21,10 +21,12 @@ class PegasusEnvCfg:
     """Base configuration for Pegasus Environments."""
     observation_space: int = 0
     action_space: int = 0
-    state_space: int = 0  
+    state_space: int = 0
     episode_length_s: float = 10.0
-    decimation: int = 2  
+    decimation: int = 2
     sim_dt: float = 0.01
+    action_mode: str = "direct_force"  # "direct_force" or "rotor_velocity"
+    vehicle: str = "Iris"              # key into pegasus.simulator.params.ROBOTS
 
 
 class PegasusEnv(ABC):
@@ -33,6 +35,11 @@ class PegasusEnv(ABC):
     """
 
     def __init__(self, cfg: PegasusEnvCfg, backend, reset_manager):
+        """Builds the vectorized environment from its config, backend and reset manager.
+
+        Derives episode bookkeeping (``max_episode_length``, ``step_dt``) and exposes the
+        Gymnasium ``policy`` (and optional ``critic``) observation/action spaces.
+        """
         self.cfg = cfg
         self.backend = backend
         self.reset_manager = reset_manager
@@ -62,12 +69,13 @@ class PegasusEnv(ABC):
         if cfg.state_space and cfg.state_space > 0:
             obs_spaces["critic"] = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(cfg.state_space,), dtype=np.float32)
 
-        self.single_observation_space = gym.spaces.Dict(obs_spaces)
-        self.single_action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(cfg.action_space,), dtype=np.float32)
+        single_observation_space = gym.spaces.Dict(obs_spaces)
 
-        self.observation_space = self.single_observation_space["policy"]
-        self.action_space = self.single_action_space
-        self.state_space = self.single_observation_space.spaces.get("critic", None)
+        self.observation_space = single_observation_space["policy"]
+        self.state_space = single_observation_space.spaces.get("critic", None)
+
+        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(cfg.action_space,), dtype=np.float32)
+
 
     def setup(self):
         """Initializes device buffers after timeline starts."""
@@ -77,15 +85,19 @@ class PegasusEnv(ABC):
 
     @property
     def device(self) -> str:
+        """Torch device of the underlying backend (e.g. ``"cuda"``)."""
         return self.backend.device
 
     @property
     def parts_per_vehicle(self) -> int:
+        """Number of rigid-body parts that make up each vehicle."""
         return self.backend.parts_per_vehicle
 
     @property
     def unwrapped(self):
+        """Returns the base environment (no wrappers applied here)."""
         return self
+
 
     # -------------------------------------------
     # Public API
@@ -113,6 +125,8 @@ class PegasusEnv(ABC):
         # Reset environments that have terminated or reached timeout
         reset_ids = (terminated | truncated).nonzero(as_tuple=False).squeeze(-1)
         if reset_ids.numel() > 0:
+            self.extras["final_observation"] = self._get_observations()["policy"].clone()
+            self.extras["final_observation_mask"] = (terminated | truncated)
             self._reset_idx(reset_ids)
 
         obs = self._get_observations()
@@ -126,7 +140,9 @@ class PegasusEnv(ABC):
         return self._get_observations(), dict(self.extras)
 
     def register_reset_callback(self, fn):
+        """Registers a callback ``fn(env_ids)`` invoked whenever environments are reset."""
         self._reset_callbacks.append(fn)
+
 
     # -------------------------------------------
     # Internal Methods
@@ -142,6 +158,7 @@ class PegasusEnv(ABC):
         for fn in self._reset_callbacks:
             fn(env_ids)
 
+
     # -------------------------------------------
     # Mandatory Task Interface
     # -------------------------------------------
@@ -154,7 +171,7 @@ class PegasusEnv(ABC):
     @abstractmethod
     def _apply_action(self):
         """Sets the processed actions as forces and torques applied to the simulator."""
-    pass
+        pass
 
     @abstractmethod
     def _get_observations(self) -> dict:

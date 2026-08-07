@@ -16,7 +16,7 @@ from tqdm import tqdm
 from pegasus.simulator.logic.rl.skrl_pegasus_wrapper import PegasusSkrlWrapper
 
 
-def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True):
+def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True, checkpoint: str | None = None):
     """Initializes the PPO agent, sets up logging, and starts the training loop."""
     
     # Deferred imports to avoid early CUDA initialization conflicts with Isaac Sim
@@ -55,6 +55,10 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
         action_space=wrapped.action_space,
         device=device,
     )
+
+    if checkpoint is not None:
+        agent.load(checkpoint)
+        print(f"[PPO] Loaded checkpoint from: {checkpoint}")
 
     # Save the custom config inside the folder skrl just created
     run_dir = agent.experiment_dir

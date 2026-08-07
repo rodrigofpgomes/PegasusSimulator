@@ -13,7 +13,7 @@ import torch.nn as nn
 from pegasus.simulator.logic.rl.skrl_pegasus_wrapper import PegasusSkrlWrapper
 
 
-def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True):
+def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True, checkpoint: str | None = None):
     """Initializes the PPO agent, sets up logging, and starts the training loop."""
     
     # Deferred imports to avoid early CUDA initialization conflicts with Isaac Sim
@@ -36,7 +36,12 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     cfg = _prepare_cfg(agent_cfg["cfg"], device)
 
     # Inject observation size into preprocessor
-    cfg["state_preprocessor_kwargs"]["size"] = wrapped.observation_space
+    if cfg.get("state_preprocessor") is not None:
+        cfg["state_preprocessor_kwargs"]["size"] = wrapped.observation_space
+
+    expected_num_envs = agent_cfg.get("expected_num_envs")
+    if (expected_num_envs is not None and wrapped.num_envs != expected_num_envs):
+        raise ValueError(f"Preset configured for {expected_num_envs} environments, " f"but received {wrapped.num_envs}")
 
     # Rollout memory (on-policy core)
     memory = RandomMemory(memory_size=cfg["rollouts"], num_envs=wrapped.num_envs, device=device)
@@ -53,6 +58,10 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
         action_space=wrapped.action_space,
         device=device,
     )
+
+    if checkpoint is not None:
+        agent.load(checkpoint)
+        print(f"[PPO] Loaded checkpoint from: {checkpoint}")
 
     # Save the custom config inside the folder skrl just created
     run_dir = agent.experiment_dir
