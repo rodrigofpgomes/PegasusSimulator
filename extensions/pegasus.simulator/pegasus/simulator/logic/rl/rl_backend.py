@@ -35,7 +35,11 @@ class RLBackend(Backend):
         self._device = device
 
         self._forces = None
+        self._external_forces = None
+
         self._torques = None
+        self._external_torques = None
+
         self._input_reference = None
         self._state_cache = None
         self._received_first_state = False
@@ -85,6 +89,8 @@ class RLBackend(Backend):
 
         self._forces = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
         self._torques = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
+        self._external_forces = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
+        self._external_torques = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
         self._input_reference = torch.zeros((self._n_vehicles, num_rotors), dtype=torch.float32, device=self._device)
         self._state_cache = torch.zeros((self._n_vehicles, 13), dtype=torch.float32, device=self._device)
 
@@ -126,7 +132,7 @@ class RLBackend(Backend):
                 q = self._state_cache[:, 6:10]
                 w = self._state_cache[:, 10:13]
                 R = quaternion_to_matrix(q)
-               
+            
                 # Get the current axis Z_B (given by the last column of the rotation matrix)
                 Z_B = R[:, :,2]
 
@@ -194,6 +200,10 @@ class RLBackend(Backend):
         """Returns the desired rotor velocities (used in 'rotor_velocity' mode)."""
         return self._input_reference
 
+    def external_forces_and_torques(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Returns the external forces and torques to be applied to the vehicles."""
+        return self._external_forces, self._external_torques
+
     # -------------------------------------------
     # VecEnv Interface
     # -------------------------------------------
@@ -203,8 +213,13 @@ class RLBackend(Backend):
         self._forces = forces
         self._torques = torques
 
+    def set_external_forces_and_torques(self, forces: torch.Tensor, torques: torch.Tensor):
+        """Receives new external forces and torques from the RL environment."""
+        self._external_forces = forces
+        self._external_torques = torques
+
     def set_state(self, env_ids: torch.Tensor, positions: torch.Tensor, attitudes: torch.Tensor, 
-                           linear_velocity: torch.Tensor | None = None, angular_velocity: torch.Tensor | None = None):
+                        linear_velocity: torch.Tensor | None = None, angular_velocity: torch.Tensor | None = None):
         """Overrides the state matrix for selected environments (e.g., during resets)."""
         if self._state_cache is None or env_ids.numel() == 0:
             return

@@ -2,52 +2,24 @@
   "vehicle": "shuttle_glider",
   "vehicles": [
     {
-      "name": "shuttle_glider_v3_obs_",
+      "name": "shuttle_glider_v3_obs",
       "type": "sac_skrl",
-      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/old2/shuttle_glider_v3_obs/logs/26-07-17_21-22-21-309587_SACDelayed_delay_2/checkpoints/best_agent.pt",
-      "task": "shuttle_glider/old2/shuttle_glider_v3_obs",
+      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v3_obs/logs/26-07-17_21-22-21-309587_SACDelayed_delay_2/checkpoints/best_agent.pt",
+      "task": "shuttle_glider/shuttle_glider_v3_obs",
       "preset": "isaac_lab"
     },
     {
-      "name": "shuttle_glider_v3_obs_clamp",
+      "name": "shuttle_glider_v3_obs_tail",
       "type": "sac_skrl",
-      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v3_obs_05/logs/26-08-01_00-45-03-030007_SACDelayed_delay_2/checkpoints/best_agent.pt",
-      "task": "shuttle_glider/shuttle_glider_v3_obs_05",
+      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v3_obs_tail/logs/26-08-10_12-13-14-489038_SACDelayed_delay_2/checkpoints/best_agent.pt",
+      "task": "shuttle_glider/shuttle_glider_v3_obs_tail",
       "preset": "isaac_lab"
     },
     {
-      "name": "shuttle_glider_v3_obs_2",
+      "name": "shuttle_glider_v3_obs_tail2",
       "type": "sac_skrl",
-      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v3_obs_2/logs/26-08-01_00-45-35-305079_SACDelayed_delay_2/checkpoints/best_agent.pt",
-      "task": "shuttle_glider/shuttle_glider_v3_obs_2",
-      "preset": "isaac_lab"
-    },
-    {
-      "name": "shuttle_glider_v3_obs_4",
-      "type": "sac_skrl",
-      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v3_obs_4/logs/26-08-01_00-46-05-247513_SACDelayed_delay_2/checkpoints/best_agent.pt",
-      "task": "shuttle_glider/shuttle_glider_v3_obs_4",
-      "preset": "isaac_lab"
-    },
-    {
-      "name": "shuttle_glider_v3_obs_9",
-      "type": "sac_skrl",
-      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v3_obs_9/logs/26-08-01_00-46-52-616394_SACDelayed_delay_2/checkpoints/best_agent.pt",
-      "task": "shuttle_glider/shuttle_glider_v3_obs_9",
-      "preset": "isaac_lab"
-    },
-    {
-      "name": "shuttle_glider_v3_obs_13",
-      "type": "sac_skrl",
-      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v3_obs_13/logs/26-08-01_00-47-40-351712_SACDelayed_delay_2/checkpoints/best_agent.pt",
-      "task": "shuttle_glider/shuttle_glider_v3_obs_13",
-      "preset": "isaac_lab"
-    },
-    {
-      "name": "shuttle_glider_v3_obs_22",
-      "type": "sac_skrl",
-      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v3_obs_22/logs/26-08-01_00-49-15-072197_SACDelayed_delay_2/checkpoints/best_agent.pt",
-      "task": "shuttle_glider/shuttle_glider_v3_obs_22",
+      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v3_obs_tail2/logs/26-08-10_12-24-40-164770_SACDelayed_delay_2/checkpoints/best_agent.pt",
+      "task": "shuttle_glider/shuttle_glider_v3_obs_tail2",
       "preset": "isaac_lab"
     }
   ]

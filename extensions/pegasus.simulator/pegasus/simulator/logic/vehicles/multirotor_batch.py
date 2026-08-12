@@ -327,6 +327,13 @@ class MultirotorBatch(VehicleBatch):
         drag = self._drag.update(self._state, dt)
         #self._forces[:, 0, :] += drag
 
+        if hasattr(self._backends[0], "external_forces_and_torques"):
+            result = self._backends[0].external_forces_and_torques()
+            if result is not None:
+                external_forces, external_torques = result
+                self._forces += external_forces
+                self._torques += external_torques
+
         # Apply the batched forces and torques in the simulator.
         self.apply_forces_and_torques_all_parts(self._forces, self._torques)
 
