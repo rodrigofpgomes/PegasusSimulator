@@ -28,6 +28,7 @@ class QuadraticThrustGliderCurveBatch(ThrustCurve):
             >>>  "min_rotor_velocity": [0, 0, 0, 0, 0],                      # rad/s
             >>>  "max_rotor_velocity": [1400, 1400, 1400, 1400, 3500],          # rad/s
             >>>  "motor_time_constant": [0.008, 0.008, 0.008, 0.008, 0.0125],
+            >>>  "rotor_axes_body": [[0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [1, 0, 0]]
             >>> }
         """
         # Set device

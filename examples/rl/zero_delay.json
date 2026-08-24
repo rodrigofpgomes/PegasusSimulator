@@ -1,9 +1,0 @@
-{
-  "vehicle": "iris",
-  "vehicles": [
-    { "name": "ppo_isaac",      "type": "ppo",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/double_integrator/01_isaac_lab/logs/26-06-08_00-14-44-664165_PPO/checkpoints/best_agent.pt", "task": "double_integrator/01_isaac_lab", "preset": "isaac_lab" },
-    { "name": "raptor",   "type": "raptor",   "checkpoint": null },
-    { "name": "sac",      "type": "sac",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/raptor_pretrain/logs/26-06-09_22-54-29-214064_SACDelayed_delay_2/checkpoints/agent_310000.pt" },
-    { "name": "mellinger",      "type": "nonlinear",      "checkpoint": null }
-  ]
-}

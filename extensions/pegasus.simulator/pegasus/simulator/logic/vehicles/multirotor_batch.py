@@ -331,6 +331,7 @@ class MultirotorBatch(VehicleBatch):
             result = self._backends[0].external_forces_and_torques()
             if result is not None:
                 external_forces, external_torques = result
+                
                 self._forces += external_forces
                 self._torques += external_torques
 

@@ -1,9 +1,0 @@
-{
-  "vehicle": "iris",
-  "vehicles": [
-    { "name": "raptor",   "type": "raptor",   "checkpoint": null },
-    { "name": "pretrain", "type": "pretrain", "checkpoint": "/home/rodrigogomes/raptor/rl-tools/experiments/2026-05-27_12-25-16/e43ae4b_foundation-policy-pre-training_dynamics-id/0/0000/steps/000000001000000/checkpoint.h5" },
-    { "name": "sac",      "type": "sac",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/raptor_pretrain/logs/26-06-11_01-39-21-013039_SACDelayed_delay_2/checkpoints/agent_500000.pt" },
-    { "name": "mellinger",      "type": "nonlinear",      "checkpoint": null }
-  ]
-}

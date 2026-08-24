@@ -232,10 +232,19 @@ class QuadcopterEnv(PegasusEnv):
 
         R = quaternion_to_matrix(quat)
 
-        vel_b = R.transpose(1, 2) @ vel_w.unsqueeze(-1)
+        vel_b = (R.transpose(1, 2) @ vel_w.unsqueeze(-1)).squeeze(-1)
         ang_b = state[:, 10:13]
+        
+        force_tail_b, torque_tail_b = self.vertical_tail_wrench(v_com_b=vel_b, omega_b=ang_b)
 
-        external_forces, external_torques = self.vertical_tail_wrench(vel_b.squeeze(-1), ang_b)
+        external_forces = torch.zeros((self.num_envs, self.backend.parts_per_vehicle, 3), device=self.device, dtype=vel_b.dtype)
+        external_torques = torch.zeros_like(external_forces)
+
+        body_idx = self.backend._vehicle.body_index
+
+        external_forces[:, body_idx, :] = force_tail_b
+        external_torques[:, body_idx, :] = torque_tail_b
+
         self.backend.set_external_forces_and_torques(external_forces, external_torques)
 
     def _get_observations(self) -> dict:
@@ -377,13 +386,7 @@ class QuadcopterEnv(PegasusEnv):
 
         self._call_reset_callbacks(env_ids)
 
-    @staticmethod
-    def vertical_tail_wrench(
-        v_com_b,       # [num_envs, 3], velocidade do COM em body frame
-        omega_b,       # [num_envs, 3], velocidade angular em body frame
-        wind_b=None,   # [num_envs, 3], vento em body frame
-        rho=1.225,
-    ):
+    def vertical_tail_wrench(self, v_com_b, omega_b, wind_b=None, rho=1.225):
         device = v_com_b.device
         dtype = v_com_b.dtype
 
@@ -405,12 +408,28 @@ class QuadcopterEnv(PegasusEnv):
         if wind_b is None:
             wind_b = torch.zeros_like(v_com_b)
 
-        # Velocidade do CP relativamente ao ar.
-        v_cp_b = (
-            v_com_b
-            + torch.cross(omega_b, r_vtail, dim=-1)
-            - wind_b
-        )
+        # ---------------------------------------------------------
+        # 1. Velocidade base no centro de pressão da cauda
+        # ---------------------------------------------------------
+        v_cp_base_b = v_com_b + torch.cross(omega_b,r_vtail, dim=-1) - wind_b
+    
+        # ---------------------------------------------------------
+        # 2. Acrescentar o slipstream do quinto rotor
+        # ---------------------------------------------------------
+        omega_5 = self.backend._vehicle._thrusters._velocity[:, 4]
+
+        kf_5 = self.backend._vehicle._thrusters._rotor_constant[4]
+        
+
+        v_cp_b, thrust_5, v_induced, delta_v = self.puller_slipstream(omega_5=omega_5,
+                                                                        v_cp_b=v_cp_base_b,
+                                                                        kf_5=kf_5,
+                                                                        rho=rho,
+                                                                        prop_radius=0.13,
+                                                                        wake_factor=1.5,
+                                                                        coverage_factor=0.3,
+                                                                    )
+        
 
         # A cauda vertical trabalha principalmente no plano XY.
         v_xy = v_cp_b.clone()
@@ -504,3 +523,60 @@ class QuadcopterEnv(PegasusEnv):
         )
 
         return force_b, torque_b
+    
+    @staticmethod
+    def puller_slipstream(
+        omega_5: torch.Tensor,
+        v_cp_b: torch.Tensor,
+        kf_5: float,
+        rho: float = 1.225,
+        prop_radius: float = 0.13,
+        wake_factor: float = 1.5,
+        coverage_factor: float = 0.3,
+    ):
+        device = v_cp_b.device
+        dtype = v_cp_b.dtype
+
+        rotor_axis_b = torch.tensor(
+            [1.0, 0.0, 0.0],
+            device=device,
+            dtype=dtype,
+        )
+
+        # Tração do rotor propulsor.
+        thrust_5 = kf_5 * omega_5.square()
+
+        # Área do disco.
+        disk_area = torch.pi * prop_radius**2
+
+        # Velocidade relativa axial já existente.
+        v_axial = torch.sum(
+            v_cp_b * rotor_axis_b,
+            dim=-1,
+        )
+
+        # Primeira aproximação: evitar regimes de fluxo reverso.
+        v_axial_model = v_axial.clamp_min(0.0)
+
+        # Velocidade induzida no disco.
+        v_induced = 0.5 * (
+            torch.sqrt(
+                v_axial_model.square()
+                + 2.0 * thrust_5 / (rho * disk_area + 1e-6)
+            )
+            - v_axial_model
+        )
+
+        # Incremento de velocidade na zona da cauda.
+        delta_v = (
+            wake_factor
+            * coverage_factor
+            * v_induced
+        )
+
+        v_tail_b = (
+            v_cp_b
+            + delta_v.unsqueeze(-1) * rotor_axis_b
+        )
+
+        return v_tail_b, thrust_5, v_induced, delta_v

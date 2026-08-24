@@ -87,6 +87,7 @@ from pxr import PhysxSchema
 
 from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
 from pegasus.simulator.logic.vehicles.multirotor_batch import MultirotorBatch, MultirotorBatchConfig
+from pegasus.simulator.logic.vehicles.shuttle_glider_batch import ShuttleGliderBatch, ShuttleGliderBatchConfig
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.rl import RLBackend, ResetManager, GoalCfg, InitStateCfg
 
@@ -177,10 +178,23 @@ def main():
     # Setup Vehicles
     backend = RLBackend(n_vehicles=n_envs, action_mode=env_cfg.action_mode, device=device)
     physics_cfg = getattr(env_cfg, "vehicle_physics_cfg", None) or {}
-    vehicle_cfg = MultirotorBatchConfig(cfg=physics_cfg, n_vehicles=n_envs)
+    
+    if env_cfg.vehicle == "Shuttle_glider":
+        vehicle_cfg = ShuttleGliderBatchConfig(
+            cfg=physics_cfg,
+            n_vehicles=n_envs,
+        )
+        VehicleClass = ShuttleGliderBatch
+    else:
+        vehicle_cfg = MultirotorBatchConfig(
+            cfg=physics_cfg,
+            n_vehicles=n_envs,
+        )
+        VehicleClass = MultirotorBatch
+    
     vehicle_cfg.backends = [backend]
 
-    MultirotorBatch(
+    VehicleClass(
         stage_prefix="/World/quadrotor", usd_file=ROBOTS[env_cfg.vehicle],
         vehicle_batch_id=1, n_vehicles=n_envs, spacing=2.5,
         config=vehicle_cfg,

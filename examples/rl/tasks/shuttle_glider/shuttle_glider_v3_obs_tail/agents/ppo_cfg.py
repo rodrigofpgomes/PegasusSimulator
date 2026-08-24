@@ -1,43 +1,3 @@
-"""
-| File: agents/ppo_cfg.py
-| Description: PPO configuration aligned with the RAPTOR SAC pre-training
-|              configuration where the algorithms have comparable parameters.
-|
-| Environment:
-|     Observation space: 26
-|     Action space:       4
-|     Control frequency:  100 Hz
-|     Episode length:     500 steps / 5 seconds
-|
-| SAC-aligned PPO:
-|     Actor:       Dense(obs -> 64, ReLU)
-|                  Dense(64 -> 64, ReLU)
-|                  Dense(64 -> action mean)
-|
-|     Value:       Dense(obs -> 256, ReLU)
-|                  Dense(256 -> 256, ReLU)
-|                  Dense(256 -> 1)
-|
-|     Learning rate:       3e-4
-|     Discount factor:     0.99
-|     Batch size:          rollouts * num_envs
-|     State preprocessing: disabled
-|     Gradient clipping:   disabled
-|     Scheduler:           disabled
-|     Timeout bootstrap:   enabled
-|
-| Default vectorized setup:
-|     num_envs:             32
-|     rollouts:             128
-|     samples/update:       128 * 32 = 4096
-|     mini_batches:         8
-|     mini-batch size:      512
-|     learning epochs:      5
-|     total transitions:    approximately 1,000,000
-"""
-
-from __future__ import annotations
-
 import copy
 import math
 
@@ -45,40 +5,21 @@ import torch
 import torch.nn as nn
 
 from skrl.agents.torch.ppo import PPO_DEFAULT_CONFIG
-from skrl.models.torch import (
-    DeterministicMixin,
-    GaussianMixin,
-    Model,
-)
+from skrl.models.torch import DeterministicMixin, GaussianMixin, Model
 
-from skrl.resources.preprocessors.torch import RunningStandardScaler
-from skrl.resources.schedulers.torch import KLAdaptiveLR
-
-
-# ---------------------------------------------------------------------
-# Experiment constants
-# ---------------------------------------------------------------------
-
-DEFAULT_NUM_ENVS = 1024
-
-ROLLOUTS = 64
-LEARNING_EPOCHS = 5
-MINI_BATCHES = 16
-
-PPO_UPDATES = 1500
 
 # ---------------------------------------------------------------------
 # Policy
 # ---------------------------------------------------------------------
 
 class Policy(GaussianMixin, Model):
-    """PPO Gaussian actor aligned with the SAC actor architecture.
+    """
+    Política Gaussiana equivalente à MlpPolicy usada no repositório
+    optimal_quad_control_RL.
 
-    The SAC policy produces both a state-dependent mean and log standard
-    deviation. PPO generally behaves more robustly with a global learned
-    log standard deviation, so only the mean is state-dependent here.
-
-    The output actions are clipped to the action-space bounds by skrl.
+    Observação: 26
+    Ação: 4 comandos normalizados dos rotores em [-1, 1]
+    Arquitetura: 64-64-64, ReLU
     """
 
     def __init__(
@@ -86,17 +27,17 @@ class Policy(GaussianMixin, Model):
         observation_space,
         action_space,
         device,
-        clip_actions: bool = True,
-        clip_log_std: bool = True,
-        min_log_std: float = -5.0,
-        max_log_std: float = 1.0,
-        reduction: str = "sum",
+        clip_actions=True,
+        clip_log_std=True,
+        min_log_std=-20,
+        max_log_std=2,
+        reduction="sum",
     ):
         Model.__init__(
             self,
-            observation_space,
-            action_space,
-            device,
+            observation_space=observation_space,
+            action_space=action_space,
+            device=device,
         )
 
         GaussianMixin.__init__(
@@ -108,74 +49,76 @@ class Policy(GaussianMixin, Model):
             reduction=reduction,
         )
 
-        # Matches the SAC actor hidden architecture:
-        # obs -> 64 -> 64 -> action mean
         self.net = nn.Sequential(
             nn.Linear(self.num_observations, 64),
             nn.ReLU(),
-
+            #nn.Linear(64, 64),
+            #nn.ReLU(),
             nn.Linear(64, 64),
             nn.ReLU(),
-
             nn.Linear(64, self.num_actions),
         )
 
-        # exp(-0.5) ~= 0.607 initial action standard deviation.
-        #
-        # This is less aggressive than log_std=0 (std=1), which produces
-        # many saturated motor commands at the start of training.
-        self.log_std_parameter = nn.Parameter(torch.full((self.num_actions,), fill_value=-0.5, device=device))
+        # Stable-Baselines3 utiliza um log_std global por ação.
+        # log_std_init=0 -> std inicial = exp(0) = 1.
+        self.log_std_parameter = nn.Parameter(
+            torch.Tensor(self.num_actions).fill_(torch.tensor(-1.0)),
+        )
 
         self._initialize_weights()
 
-    def _initialize_weights(self) -> None:
-        """Use orthogonal initialization commonly used with PPO."""
-        for layer in self.net:
-            if isinstance(layer, nn.Linear):
-                nn.init.orthogonal_(
-                    layer.weight,
-                    gain=math.sqrt(2.0),
-                )
-                nn.init.zeros_(layer.bias)
+    def _initialize_weights(self):
+        """
+        Inicialização próxima da inicialização ortogonal usada pelo SB3.
+        """
+        linear_layers = [
+            module
+            for module in self.net
+            if isinstance(module, nn.Linear)
+        ]
 
-        # Smaller initialization on the policy output layer prevents
-        # extreme initial motor commands.
-        output_layer = self.net[-1]
+        # Camadas escondidas
+        for layer in linear_layers[:-1]:
+            nn.init.orthogonal_(
+                layer.weight,
+                gain=math.sqrt(2.0),
+            )
+            nn.init.zeros_(layer.bias)
 
+        # Output da política com ganho pequeno
         nn.init.orthogonal_(
-            output_layer.weight,
+            linear_layers[-1].weight,
             gain=0.01,
         )
-        nn.init.zeros_(output_layer.bias)
+        nn.init.zeros_(linear_layers[-1].bias)
 
     def compute(self, inputs, role):
         mean_actions = self.net(inputs["states"])
 
-        return (
-            mean_actions,
-            self.log_std_parameter,
-            {},
-        )
+        return mean_actions, self.log_std_parameter, {}
+
 
 # ---------------------------------------------------------------------
 # Value function
 # ---------------------------------------------------------------------
 
 class Value(DeterministicMixin, Model):
-    """PPO value function aligned with the SAC critic hidden sizes."""
+    """
+    Função de valor V(s), separada da policy.
+    """
 
     def __init__(
         self,
         observation_space,
         action_space,
         device,
-        clip_actions: bool = False,
+        clip_actions=False,
     ):
         Model.__init__(
             self,
-            observation_space,
-            action_space,
-            device,
+            observation_space=observation_space,
+            action_space=action_space,
+            device=device,
         )
 
         DeterministicMixin.__init__(
@@ -183,191 +126,219 @@ class Value(DeterministicMixin, Model):
             clip_actions=clip_actions,
         )
 
-        # SAC critics use two hidden layers with 256 units.
-        # PPO V(s) receives only the observation, without an action.
         self.net = nn.Sequential(
-            nn.Linear(self.num_observations, 256),
+            nn.Linear(self.num_observations, 64),
             nn.ReLU(),
-
-            nn.Linear(256, 256),
+            #nn.Linear(64, 64),
+            #nn.ReLU(),
+            nn.Linear(64, 64),
             nn.ReLU(),
-
-            nn.Linear(256, 1),
+            nn.Linear(64, 1),
         )
 
         self._initialize_weights()
 
-    def _initialize_weights(self) -> None:
-        for layer in self.net:
-            if isinstance(layer, nn.Linear):
-                nn.init.orthogonal_(
-                    layer.weight,
-                    gain=math.sqrt(2.0),
-                )
-                nn.init.zeros_(layer.bias)
+    def _initialize_weights(self):
+        linear_layers = [
+            module
+            for module in self.net
+            if isinstance(module, nn.Linear)
+        ]
 
-        output_layer = self.net[-1]
+        for layer in linear_layers[:-1]:
+            nn.init.orthogonal_(
+                layer.weight,
+                gain=math.sqrt(2.0),
+            )
+            nn.init.zeros_(layer.bias)
 
         nn.init.orthogonal_(
-            output_layer.weight,
+            linear_layers[-1].weight,
             gain=1.0,
         )
-        nn.init.zeros_(output_layer.bias)
+        nn.init.zeros_(linear_layers[-1].bias)
 
     def compute(self, inputs, role):
         return self.net(inputs["states"]), {}
 
+
 # ---------------------------------------------------------------------
-# Model factory
+# Factory
 # ---------------------------------------------------------------------
 
-def _make_models(obs_space, act_space, device):
+def make_models(observation_space, action_space, device):
     return {
         "policy": Policy(
-            observation_space=obs_space,
-            action_space=act_space,
-            device=device,
-            clip_actions=True,
+            observation_space,
+            action_space,
+            device,
         ),
         "value": Value(
-            observation_space=obs_space,
-            action_space=act_space,
-            device=device,
+            observation_space,
+            action_space,
+            device,
         ),
     }
+
+
+# ---------------------------------------------------------------------
+# Reward scaling
+# ---------------------------------------------------------------------
+
+def reward_shaper(rewards, timestep, timesteps):
+    """
+    O teu ambiente tem rewards cerca de 10 vezes maiores:
+
+    reward normal: até aproximadamente +1.5
+    morte: -100
+
+    No repositório inicial, as rewards normais são normalmente da ordem
+    de 0.01–0.1 e a colisão dá -10.
+
+    Multiplicar por 0.1 preserva exatamente a política ótima:
+
+    +1.5  -> +0.15
+    -100  -> -10
+    """
+    return 0.1 * rewards
+
 
 # ---------------------------------------------------------------------
 # PPO configuration
 # ---------------------------------------------------------------------
 
-def _make_cfg() -> dict:
+def make_cfg():
     cfg = copy.deepcopy(PPO_DEFAULT_CONFIG)
 
-    # -------------------------------------------------------------
-    # Rollout and optimization
-    # -------------------------------------------------------------
+    # ---------------------------------------------------------------
+    # Rollout
+    # ---------------------------------------------------------------
 
-    # At 100 Hz, 128 steps correspond to 1.28 seconds.
-    #
-    # With 32 envs:
-    #     samples/update = 128 * 32 = 4096
-    cfg["rollouts"] = ROLLOUTS
+    # Igual a n_steps=1000 no Stable-Baselines3
+    cfg["rollouts"] = 1000
 
-    # Each collected sample is reused for 5 optimization epochs.
-    cfg["learning_epochs"] = LEARNING_EPOCHS
+    # Igual a n_epochs=10
+    cfg["learning_epochs"] = 10
 
-    # With 32 envs:
-    #     mini-batch size = 4096 / 8 = 512
-    cfg["mini_batches"] = MINI_BATCHES
+    # 100 envs × 1000 steps = 100 000 amostras por rollout.
+    # 100 000 / 20 = minibatches de 5000 amostras.
+    cfg["mini_batches"] = 20
 
-    # -------------------------------------------------------------
-    # Returns and advantages
-    # -------------------------------------------------------------
+    # ---------------------------------------------------------------
+    # Returns e GAE
+    # ---------------------------------------------------------------
 
-    # Matches SAC.
-    cfg["discount_factor"] = 0.99
-
-    # PPO-specific GAE parameter.
+    cfg["discount_factor"] = 0.999
     cfg["lambda"] = 0.95
 
-    # Bootstraps from the value of the final observation when an episode
-    # finishes because of the 5-second time limit.
-    cfg["time_limit_bootstrap"] = False
+    # ---------------------------------------------------------------
+    # Otimizador
+    # ---------------------------------------------------------------
 
-    # -------------------------------------------------------------
-    # Optimizer
-    # -------------------------------------------------------------
+    # Default usado no PPO do Stable-Baselines3
+    cfg["learning_rate"] = 3e-4
 
-    # SAC uses 3e-4 for both actor and critic.
-    # skrl PPO uses a shared optimizer learning rate.
-    cfg["learning_rate"] = 5e-4
+    # O repositório inicial não usa scheduler KL adaptativo
+    cfg["learning_rate_scheduler"] = None
+    cfg["learning_rate_scheduler_kwargs"] = {}
 
-    # Matches the SAC configuration: fixed learning rate.
-    cfg["learning_rate_scheduler"] = KLAdaptiveLR
-    cfg["learning_rate_scheduler_kwargs"] = {"kl_threshold": 0.016}
+    cfg["grad_norm_clip"] = 0.5
 
-    # Matches SAC, where gradient clipping is disabled.
-    cfg["grad_norm_clip"] = 1.0
-
-    # -------------------------------------------------------------
+    # ---------------------------------------------------------------
     # PPO clipping
-    # -------------------------------------------------------------
+    # ---------------------------------------------------------------
 
     cfg["ratio_clip"] = 0.2
-    cfg["value_clip"] = 0.2
-    cfg["clip_predicted_values"] = True
 
-    # Stop an optimization epoch if the policy moves too far.
-    #
-    # Unlike KLAdaptiveLR, this does not change the learning rate.
+    # SB3 não usa value-function clipping por defeito
+    cfg["clip_predicted_values"] = False
+    cfg["value_clip"] = 0.2
+
+    # ---------------------------------------------------------------
+    # Loss
+    # ---------------------------------------------------------------
+
+    cfg["entropy_loss_scale"] = 0.0
+    cfg["value_loss_scale"] = 0.5
+
+    # Sem early stopping por KL, semelhante ao SB3 utilizado
     cfg["kl_threshold"] = 0.0
 
-    # -------------------------------------------------------------
-    # Loss
-    # -------------------------------------------------------------
-
-    cfg["value_loss_scale"] = 1.0
-
-    # SAC explicitly maximizes entropy. PPO has no learned temperature,
-    # so a small fixed entropy bonus is used.
-    cfg["entropy_loss_scale"] = 0.0
-
-    # -------------------------------------------------------------
+    # ---------------------------------------------------------------
     # Preprocessing
-    # -------------------------------------------------------------
+    # ---------------------------------------------------------------
 
-    # SAC trains using raw observations, so PPO does the same here.
-    cfg["state_preprocessor"] = RunningStandardScaler
-    cfg["state_preprocessor_kwargs"] = {"size": None}
+    # O repositório inicial não utiliza VecNormalize.
+    # O teu SAC também treina com observações raw.
+    cfg["state_preprocessor"] = None
+    cfg["state_preprocessor_kwargs"] = {}
 
-    # Do not normalize value targets, to remain closer to the SAC setup.
-    cfg["value_preprocessor"] = RunningStandardScaler
-    cfg["value_preprocessor_kwargs"] = {"size": 1}
+    cfg["value_preprocessor"] = None
+    cfg["value_preprocessor_kwargs"] = {}
 
-    # -------------------------------------------------------------
-    # Warm-up
-    # -------------------------------------------------------------
+    # Ajusta a escala da tua reward à reward do repositório inicial
+    cfg["rewards_shaper"] = reward_shaper
+
+    # ---------------------------------------------------------------
+    # Inicialização
+    # ---------------------------------------------------------------
 
     cfg["random_timesteps"] = 0
     cfg["learning_starts"] = 0
 
-    # No reward scaling.
-    cfg["rewards_shaper_scale"] = 0.01
+    # O episódio terminar aos 5 segundos é truncatura e não morte.
+    # Deve ser usado bootstrap da função de valor.
+    cfg["time_limit_bootstrap"] = True
 
-    cfg["rewards_shaper"] = _reward_shaper
-
-    # -------------------------------------------------------------
-    # Experiment
-    # -------------------------------------------------------------
+    # ---------------------------------------------------------------
+    # Logging
+    # ---------------------------------------------------------------
 
     cfg["experiment"] = {
         "directory": "",
         "experiment_name": "",
-        "write_interval": 24,
-        "checkpoint_interval": 400,
+        "write_interval": 1000,
+
+        # Checkpoint a cada 10 rollouts:
+        # 10 × 1000 passos vetorizados
+        "checkpoint_interval": 10_000,
+
+        "store_separately": False,
+        "wandb": False,
+        "wandb_kwargs": {},
     }
 
     return cfg
 
-def _reward_shaper(rewards, timestep, timesteps):
-    return rewards * 0.01
 
 # ---------------------------------------------------------------------
 # Presets
 # ---------------------------------------------------------------------
 
 PRESETS = {
-    # Use with:
-    #
-    #     --n_envs 32
-    #
-    # 245 PPO updates:
-    #     trainer timesteps = 245 * 128 = 31,360
-    #     transitions       = 31,360 * 32 = 1,003,520
-    "isaac_lab": {
-        "models": _make_models,
-        "cfg": _make_cfg(),
-        "timesteps": ROLLOUTS * PPO_UPDATES,  # rollouts * iterations
-        "seed": None,
+    # Teste inicial mais curto
+    "test": {
+        "models": make_models,
+        "cfg": make_cfg(),
+
+        # 50 rollouts:
+        # 50 000 × 100 envs = 5 milhões de transições
+        "timesteps": 50_000,
+
+        "seed": 10,
+        "expected_num_envs": 100,
+    },
+
+    # Aproximação do treino completo do artigo
+    "paper": {
+        "models": make_models,
+        "cfg": make_cfg(),
+
+        # 1 000 000 passos vetorizados × 100 envs
+        # = 100 milhões de transições
+        "timesteps": 1_000_000,
+
+        "seed": 10,
+        "expected_num_envs": 100,
     },
 }

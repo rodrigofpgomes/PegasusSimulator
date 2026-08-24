@@ -1,0 +1,10 @@
+{
+  "vehicle": "shuttle",
+  "vehicles": [
+    { "name": "pre_train_shuttle", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle/shuttle_pretrain/logs/26-07-16_10-46-50-388360_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "shuttle/shuttle_pretrain", "preset": "isaac_lab" },
+    { "name": "v3_obs_sac", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle/shuttle_v3_obs/logs/26-07-28_23-04-12-506927_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "shuttle/shuttle_v3_obs", "preset": "isaac_lab" },
+    { "name": "v3_obs_ppo_1", "type": "ppo", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle/shuttle_v3_obs/logs/26-08-15_23-21-18-691153_PPO/checkpoints/best_agent.pt", "task": "shuttle/shuttle_v3_obs", "preset": "test" },
+    { "name": "v3_obs_ppo_2", "type": "ppo", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle/shuttle_v3_obs/logs/26-08-15_23-54-06-471668_PPO/checkpoints/best_agent.pt", "task": "shuttle/shuttle_v3_obs", "preset": "paper" },
+    { "name": "v3_obs_ppo_2_100", "type": "ppo", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle/shuttle_v3_obs_ppo/logs/26-08-16_14-19-32-134787_PPO/checkpoints/best_agent.pt", "task": "shuttle/shuttle_v3_obs_ppo", "preset": "test" }
+  ]
+}

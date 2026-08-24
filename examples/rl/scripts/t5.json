@@ -1,0 +1,11 @@
+{
+  "vehicle": "iris",
+  "vehicles": [
+    { "name": "raptor",   "type": "raptor",   "checkpoint": null },
+    { "name": "rep_pretrain", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/raptor_pretrain/logs/26-06-09_22-54-29-214064_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "raptor_pretrain", "preset": "isaac_lab" },
+    { "name": "t5", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/raptor_pretrain5/logs/26-07-07_00-07-06-387577_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "raptor_pretrain5", "preset": "isaac_lab" },
+    { "name": "t5_3", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/raptor_pretrain5_3/logs/26-07-13_15-01-30-009420_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "raptor_pretrain5_3", "preset": "isaac_lab" },
+    { "name": "t5_4", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/raptor_pretrain5_4/logs/26-07-13_15-02-22-116981_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "raptor_pretrain5_4", "preset": "isaac_lab" },
+    { "name": "t5_5", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/raptor_pretrain5_5/logs/26-07-13_15-02-59-761599_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "raptor_pretrain5_5", "preset": "isaac_lab" }
+  ]
+}
