@@ -211,25 +211,127 @@ def compute_metrics(df: pd.DataFrame, skip: int = 0) -> dict:
         if "att_err_pd" in df.columns
         else None
     )
-
-    return dict(
+    
+    metrics = dict(
         rmse=math.sqrt(sq.mean()),
         mean_err=df["pos_error"].mean(),
         max_err=df["pos_error"].max(),
         max_speed=df["speed"].max(),
-
-        att_ff=df["att_err_ff"].mean() if "att_err_ff" in df.columns else float("nan"),
-        att_pd=df["att_err_pd"].mean() if "att_err_pd" in df.columns else float("nan"),
-
-        att_ff_rmse=math.sqrt(att_ff_sq.mean()) if att_ff_sq is not None else float("nan"),
-        att_pd_rmse=math.sqrt(att_pd_sq.mean()) if att_pd_sq is not None else float("nan"),
-
-        att_ff_max=df["att_err_ff"].max() if "att_err_ff" in df.columns else float("nan"),
-        att_pd_max=df["att_err_pd"].max() if "att_err_pd" in df.columns else float("nan"),
-
-        att_ff_angle_rmse=math.sqrt((att_ff_angle ** 2).mean()) if att_ff_angle is not None else float("nan"),
-        att_pd_angle_rmse=math.sqrt((att_pd_angle ** 2).mean()) if att_pd_angle is not None else float("nan")
+        att_ff=df["att_err_ff"].mean()
+            if "att_err_ff" in df.columns
+            else float("nan"),
+        att_pd=df["att_err_pd"].mean()
+            if "att_err_pd" in df.columns
+            else float("nan"),
+        att_ff_rmse=math.sqrt(att_ff_sq.mean())
+            if att_ff_sq is not None
+            else float("nan"),
+        att_pd_rmse=math.sqrt(att_pd_sq.mean())
+            if att_pd_sq is not None
+            else float("nan"),
+        att_ff_max=df["att_err_ff"].max()
+            if "att_err_ff" in df.columns
+            else float("nan"),
+        att_pd_max=df["att_err_pd"].max()
+            if "att_err_pd" in df.columns
+            else float("nan"),
+        att_ff_angle_rmse=math.sqrt(
+            (att_ff_angle**2).mean()
+        ) if att_ff_angle is not None else float("nan"),
+        att_pd_angle_rmse=math.sqrt(
+            (att_pd_angle**2).mean()
+        ) if att_pd_angle is not None else float("nan"),
     )
+
+    glider_required = {
+        "heading_valid",
+        "heading_error_deg",
+        "heading_alignment",
+        "tilt_angle_deg",
+        "thrust_5",
+        "thrust_5_along_ref",
+        "thrust_5_useful",
+        "delta_v_slipstream_est",
+    }
+    
+    metrics["has_glider_metrics"] = glider_required.issubset(df.columns)
+    
+    if metrics["has_glider_metrics"]:
+        valid = pd.to_numeric(df["heading_valid"], errors="coerce").fillna(0.0) > 0.5
+
+        dg = df.loc[valid]
+
+        heading_error = pd.to_numeric(
+            dg["heading_error_deg"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+
+        alignment = pd.to_numeric(
+            dg["heading_alignment"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+
+        thrust_5 = pd.to_numeric(
+            dg["thrust_5"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+
+        thrust_along = pd.to_numeric(
+            dg["thrust_5_along_ref"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+
+        thrust_useful = pd.to_numeric(
+            dg["thrust_5_useful"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+
+        tilt = pd.to_numeric(
+            df["tilt_angle_deg"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+
+        delta_v = pd.to_numeric(
+            df["delta_v_slipstream_est"],
+            errors="coerce",
+        ).to_numpy(dtype=float)
+
+        heading_error = heading_error[
+            np.isfinite(heading_error)
+        ]
+
+        alignment = alignment[
+            np.isfinite(alignment)
+        ]
+
+        tilt = tilt[np.isfinite(tilt)]
+        delta_v = delta_v[np.isfinite(delta_v)]
+
+        finite_thrust = (
+            np.isfinite(thrust_5)
+            & np.isfinite(thrust_along)
+            & np.isfinite(thrust_useful)
+        )
+
+        thrust_5 = thrust_5[finite_thrust]
+        thrust_along = thrust_along[finite_thrust]
+        thrust_useful = thrust_useful[finite_thrust]
+
+        total_thrust = np.sum(thrust_5)
+
+        metrics.update(
+            heading_rmse_deg= math.sqrt(np.mean(heading_error**2)) if heading_error.size else float("nan"),
+            heading_mae_deg= np.mean(np.abs(heading_error)) if heading_error.size else float("nan"),
+            heading_alignment_mean=np.mean(alignment) if alignment.size else float("nan"),
+            tilt_rmse_deg= math.sqrt(np.mean(tilt**2)) if tilt.size else float("nan"),
+            thrust_5_mean= np.mean(thrust_5) if thrust_5.size else float("nan"),
+            thrust_5_along_mean=np.mean(thrust_along) if thrust_along.size else float("nan"),
+            useful_thrust_fraction=np.sum(thrust_useful) / (total_thrust + 1e-9) if thrust_5.size else float("nan"),
+            signed_thrust_fraction= np.sum(thrust_along) / (total_thrust + 1e-9) if thrust_5.size else float("nan"),
+            slipstream_delta_v_mean= np.mean(delta_v) if delta_v.size else float("nan"),
+        )
+
+    return metrics
 
 
 def metrics_text(dff: pd.DataFrame) -> str:
@@ -238,14 +340,39 @@ def metrics_text(dff: pd.DataFrame) -> str:
         d = dff[dff["controller"] == ctrl]
         m = compute_metrics(d, skip=10)
         
-        rows.append(
-            f"{ctrl}: RMSE={m['rmse']:.3f} m  mean={m['mean_err']:.3f} m  "
-            f"max={m['max_err']:.3f} m  max_speed={m['max_speed']:.2f} m/s  "
-            f"att_ff_RMSE={m['att_ff_rmse']:.3f} att_ff_angle_RMSE={m['att_ff_angle_rmse']:.2f} deg "
-            #f"att_ff_mean={m['att_ff']:.3f} att_ff_max={m['att_ff_max']:.3f} "
-            #f"att_pd_RMSE={m['att_pd_rmse']:.3f}  att_pd_angle_RMSE={m['att_pd_angle_rmse']:.2f} deg "
-            #f"att_pd_mean={m['att_pd']:.3f} att_pd_max={m['att_pd_max']:.3f}"
+        text = (
+            f"{ctrl}: "
+            f"RMSE={m['rmse']:.3f} m  "
+            f"mean={m['mean_err']:.3f} m  "
+            f"max={m['max_err']:.3f} m  "
+            f"max_speed={m['max_speed']:.2f} m/s  "
+            f"att_ff_RMSE={m['att_ff_rmse']:.3f}  "
+            f"att_ff_angle_RMSE="
+            f"{m['att_ff_angle_rmse']:.2f} deg"
         )
+        
+        if m.get("has_glider_metrics", False):
+            text += (
+                f"  heading_RMSE="
+                f"{m['heading_rmse_deg']:.2f} deg"
+                f"  alignment="
+                f"{m['heading_alignment_mean']:.3f}"
+                f"  tilt_RMSE="
+                f"{m['tilt_rmse_deg']:.2f} deg"
+                f"  T5_mean="
+                f"{m['thrust_5_mean']:.2f} N"
+                f"  T5_along="
+                f"{m['thrust_5_along_mean']:.2f} N"
+                f"  useful_T5="
+                f"{100.0 * m['useful_thrust_fraction']:.1f}%"
+                f"  signed_T5="
+                f"{100.0 * m['signed_thrust_fraction']:.1f}%"
+                f"  slipstream_dV="
+                f"{m['slipstream_delta_v_mean']:.2f} m/s"
+            )
+            
+        rows.append(text)
+
     return "  |  ".join(rows) if rows else ""
 
 
@@ -470,7 +597,56 @@ def make_att_error_fig(dff: pd.DataFrame) -> go.Figure:
 # -------------------------------------------------------------------------
 # All figures bundle
 # -----------------------------------------s--------------------------------
-_N_FIGS = 14
+_N_FIGS = 19
+
+
+def make_multi_ts_fig(dff: pd.DataFrame, series, title: str, y_title: str) -> go.Figure:
+    fig = go.Figure()
+
+    if dff.empty:
+        return empty_fig(title)
+
+    added = False
+    dashes = ["solid", "dash", "dot", "dashdot"]
+
+    for ctrl in sorted(dff["controller"].unique()):
+        d = dff[dff["controller"] == ctrl].sort_values("t")
+
+        for index, (column, label) in enumerate(series):
+            if column not in d.columns:
+                continue
+
+            fig.add_trace(
+                go.Scatter(
+                    x=d["t"],
+                    y=d[column],
+                    mode="lines",
+                    name=f"{ctrl} {label}",
+                    line=dict(
+                        color=_ctrl_color(ctrl),
+                        dash=dashes[
+                            index % len(dashes)
+                        ],
+                    ),
+                )
+            )
+
+            added = True
+
+    if not added:
+        return empty_fig(title)
+
+    fig.update_layout(
+        title=title,
+        xaxis_title="t [s]",
+        yaxis_title=y_title,
+        template="plotly_white",
+        uirevision="keep",
+    )
+
+    return fig
+
+
 
 def make_figures(df: pd.DataFrame, env_id: int, episode_id: int,
                  traj_type: str, A: float, period: float):
@@ -483,7 +659,7 @@ def make_figures(df: pd.DataFrame, env_id: int, episode_id: int,
         return empty_all
 
     label = f"env {env_id} | ep {episode_id}"
-
+    
     return (
         make_xy_fig(dff, A, period, traj_type),
         make_3d_fig(dff, A, period, traj_type),
@@ -499,6 +675,12 @@ def make_figures(df: pd.DataFrame, env_id: int, episode_id: int,
         make_rotor_fig(dff, "actual_rpm", f"Actual RPM | {label}"),
         make_ts_fig(dff, "body_force_norm",  f"Body force | {label}", "|F| [N]"),
         make_att_error_fig(dff),
+        
+        make_ts_fig(dff, "heading_error_abs_deg", f"Absolute heading error | {label}", "heading error [deg]"),
+        make_ts_fig(dff, "heading_alignment", f"Heading alignment | {label}", "cos(e_heading) [-]"),
+        make_multi_ts_fig(dff, [("thrust_5", "total"),("thrust_5_along_ref", "along trajectory"), ("thrust_5_useful", "useful")], f"Rotor 5 thrust | {label}", "thrust [N]"),
+        make_ts_fig(dff, "tilt_angle_deg", f"Tilt angle | {label}", "tilt [deg]"),
+        make_multi_ts_fig(dff, [("v_forward_body", "forward"), ("v_lateral_body", "lateral")], f"Body-frame velocity | {label}", "velocity [m/s]")
     )
 
 
@@ -514,6 +696,9 @@ _graph_ids = [
     "vel-x", "vel-y", "vel-z",
     "cmd-rpm", "actual-rpm", "force-norm",
     "att-error",
+    "heading-error", "heading-alignment",
+    "thrust-5", "tilt-angle",
+    "body-velocity",
 ]
 
 _LABEL_STYLE  = {"fontWeight": "bold", "marginBottom": "2px"}
@@ -680,8 +865,7 @@ app.layout = html.Div(
 
         # ---- Viewer controls --------------------------------------------------
         html.Div(
-            style={"display": "grid", "gridTemplateColumns": "1fr 1fr 2fr", "gap": "12px",
-                   "maxWidth": "700px"},
+            style={"display": "grid", "gridTemplateColumns": "140px 140px minmax(0, 1fr)", "gap": "12px", "width": "100%", "maxWidth": "100%"},
             children=[
                 html.Div([html.Label("Env"),     dcc.Dropdown(id="env-dropdown")]),
                 html.Div([html.Label("Episode"), dcc.Dropdown(id="episode-dropdown")]),
@@ -689,7 +873,8 @@ app.layout = html.Div(
                     html.Label("Metrics", style=_LABEL_STYLE),
                     html.Div(id="metrics-text",
                              style={"fontSize": "12px", "color": "#333",
-                                    "paddingTop": "6px", "fontFamily": "monospace"}),
+                                    "paddingTop": "6px", "fontFamily": "monospace", 
+                                    "whiteSpace": "pre-wrap", "overflowWrap": "anywhere"})
                 ]),
             ],
         ),
@@ -736,6 +921,23 @@ app.layout = html.Div(
         # ---- Attitude error ------------------------------------------------
         html.H3("Attitude error  \u03a8 = trace(I - Rd\u1d40 R)"),
         dcc.Graph(id="att-error"),
+        
+        # --- Shuttle glider metrics ------------------------------------------
+        html.H3("Shuttle glider - heading and rotor utility"),
+        html.Div(
+            style={
+                "display": "grid",
+                "gridTemplateColumns": "1fr 1fr",
+                "gap": "8px",
+            },
+            children=[
+                dcc.Graph(id="heading-error"),
+                dcc.Graph(id="heading-alignment"),
+                dcc.Graph(id="thrust-5"),
+                dcc.Graph(id="tilt-angle"),
+                dcc.Graph(id="body-velocity"),
+            ],
+        ),
 
         # ---- Log -----------------------------------------------------------
         html.H3("Run log"),

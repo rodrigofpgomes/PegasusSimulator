@@ -110,7 +110,7 @@ class LemniscateTrajectory:
         """Evaluate at an explicit time tensor (N,)."""
         return self._eval(t)
 
-    def _eval(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
+    def _eval(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         wt = self.w * t                             # (N,)
         sin_wt  = torch.sin(wt)
         cos_wt  = torch.cos(wt)
@@ -225,8 +225,21 @@ def _desired_attitude_from_accel(a_des, yaw = 0) -> np.ndarray:
 
     y_b = np.cross(z_b, x_c)
     y_norm = np.linalg.norm(y_b, axis=1, keepdims=True)
+    singular = y_norm[:, 0] < 1e-8
+    
+    if np.any(singular):
+        x_c_alt = np.zeros((np.sum(singular), 3), dtype=np.float64)
+        x_c_alt[:, 1] = 1.0
+
+        y_b[singular] = np.cross(z_b[singular], x_c_alt)
+
+        y_norm = np.linalg.norm(y_b, axis=1, keepdims=True)
+    
+    y_b = y_b / np.clip(y_norm, 1e-9, None)
     
     x_b = np.cross(y_b, z_b)
+    
+    x_b = x_b / np.clip(np.linalg.norm(x_b, axis=1, keepdims=True), 1e-9, None)
 
     R = np.empty((n, 3, 3), dtype=np.float64)
     R[:, :, 0] = x_b
@@ -255,14 +268,19 @@ class EpisodeTrajectoryRecorder:
         reset_manager=None,
         trajectory=None,
         n_rotors: int = 4,
+        vehicle_type: str = "iris",
         use_tensorboard: bool = False,
     ):
+        
         self.vehicles = vehicles
         self.n_envs = n_envs
         self.step_dt = float(step_dt)
         self.record_every = max(1, int(record_every))
         self.reset_manager = reset_manager
         self.trajectory = trajectory
+        
+        self.vehicle_type = vehicle_type
+        self.is_shuttle_glider = vehicle_type == "shuttle_glider"
 
         self.n_rotors = int(n_rotors)
 
@@ -292,37 +310,58 @@ class EpisodeTrajectoryRecorder:
         for group in ("cmd_w", "cmd_rpm", "actual_w", "actual_rpm",
                     "l2f_action", "l2f_cmd_rpm", "l2f_current_rpm"):
             rotor_cols += [f"{group}_{i}" for i in range(self.n_rotors)]
+            
+        trajectory_fields = [
+            "controller",
+            "env_id",
+            "episode_id",
+            "episode_step",
+            "global_step",
+            "t",
+            "x", "y", "z",
+            "vx", "vy", "vz",
+            "speed",
+            "goal_x", "goal_y", "goal_z",
+            "ref_vx", "ref_vy", "ref_vz",
+            "pos_error",
+            "z_error",
+            "att_err_ff",
+            "att_err_pd",
+            *rotor_cols,
+            "fx_body", "fy_body", "fz_body",
+            "body_force_norm",
+            "tx_body", "ty_body", "tz_body",
+            "body_torque_norm",
+        ]
+        
+        self.glider_metric_cols = []
+
+        if self.is_shuttle_glider:
+            self.glider_metric_cols = [
+                "heading_deg",
+                "heading_ref_deg",
+                "heading_error_deg",
+                "heading_error_abs_deg",
+                "heading_alignment",
+                "heading_valid",
+                "tilt_angle_deg",
+                "v_forward_body",
+                "v_lateral_body",
+                "beta_kinematic_deg",
+                "thrust_5",
+                "thrust_5_along_ref",
+                "thrust_5_useful",
+                "v_induced_5_est",
+                "delta_v_slipstream_est",
+            ]
+            
+            trajectory_fields += self.glider_metric_cols
 
         self.traj_writer = csv.DictWriter(
             self.traj_file,
-            fieldnames=[
-                "controller",
-                "env_id",
-                "episode_id",
-                "episode_step",
-                "global_step",
-                "t",
-
-                "x", "y", "z",
-                "vx", "vy", "vz",
-                "speed",
-
-                "goal_x", "goal_y", "goal_z",
-                "ref_vx", "ref_vy", "ref_vz",
-                "pos_error",
-                "z_error",
-
-                "att_err_ff", "att_err_pd",
-
-                *rotor_cols,
-
-                "fx_body", "fy_body", "fz_body",
-                "body_force_norm",
-
-                "tx_body", "ty_body", "tz_body",
-                "body_torque_norm",
-            ],
+            fieldnames=trajectory_fields,
         )
+        
         self.traj_writer.writeheader()
 
         self.ep_writer = csv.DictWriter(
@@ -474,7 +513,7 @@ class EpisodeTrajectoryRecorder:
         # Feed-forward desired acceleration (no position/velocity feedback).
         a_des_ff = a_ref + g_vec
         # Full outer-loop desired acceleration (PD feedback + feed-forward).
-        a_des_pd = a_ref - self.att_Kp * (pos - p_ref) + self.att_Kd * (vel - v_ref) + g_vec
+        a_des_pd = a_ref + self.att_Kp * (p_ref - pos) + self.att_Kd * (v_ref - vel) + g_vec
 
         R_des_ff = _desired_attitude_from_accel(a_des_ff)
         R_des_pd = _desired_attitude_from_accel(a_des_pd)
@@ -482,6 +521,130 @@ class EpisodeTrajectoryRecorder:
         att_err_ff = _attitude_error_trace(R, R_des_ff)
         att_err_pd = _attitude_error_trace(R, R_des_pd)
         return att_err_ff, att_err_pd
+    
+    def _compute_shuttle_glider_metrics(self, state, goals: np.ndarray, ref_vel: np.ndarray, actual_w: np.ndarray):
+        """Compute trajectory-alignment and rotor-5 metrics."""
+
+        n = self.n_envs
+        nan = np.full(n, np.nan, dtype=np.float64)
+
+        if actual_w.ndim != 2 or actual_w.shape[1] < 5:
+            return {key: nan.copy() for key in self.glider_metric_cols}
+
+        # R maps vectors from body to world.
+        R = quaternion_to_matrix(state.attitude).detach().cpu().numpy().astype(np.float64)
+
+        pos_w = state.position.detach().cpu().numpy().astype(np.float64)
+
+        vel_w = state.linear_velocity.detach().cpu().numpy().astype(np.float64)
+        
+        R_t = np.transpose(R, (0, 2, 1))                # (N,3,3)
+        vel_b = (R_t @ vel_w[..., None]).squeeze(-1)    # (N,3)
+        
+        ref_vel = np.asarray(ref_vel, dtype=np.float64)
+
+        goals = np.asarray(goals, dtype=np.float64)
+
+        # Body X axis expressed in world coordinates
+        forward_w = R[:, :, 0]
+        forward_xy = forward_w[:, :2]
+
+        forward_norm = np.linalg.norm(forward_xy, axis=1, keepdims=True)
+
+        forward_hat = forward_xy / np.clip(forward_norm, 1e-9, None)
+
+        # Desired horizontal direction
+        # Use trajectory tangent whenever a reference velocity exists.
+        # Otherwise, use the horizontal direction towards the goal.
+        ref_vel_xy = ref_vel[:, :2]
+
+        ref_speed_xy = np.linalg.norm(ref_vel_xy, axis=1)
+
+        to_goal_xy = goals[:, :2] - pos_w[:, :2]
+
+        desired_raw = np.where((ref_speed_xy > 0.15)[:, None], ref_vel_xy, to_goal_xy)
+
+        desired_norm = np.linalg.norm(desired_raw, axis=1, keepdims=True)
+
+        heading_valid = (desired_norm[:, 0] > 0.05) & (forward_norm[:, 0] > 1e-6)
+
+        desired_hat = desired_raw / np.clip(desired_norm, 1e-9, None)
+
+        # Heading and alignment
+        heading = np.arctan2(forward_hat[:, 1], forward_hat[:, 0])
+
+        heading_ref = np.arctan2(desired_hat[:, 1], desired_hat[:, 0])
+
+        # Signed error: desired heading minus current heading.
+        heading_error = np.arctan2(np.sin(heading_ref - heading), np.cos(heading_ref - heading))
+
+        heading_alignment = np.sum(forward_hat * desired_hat, axis=1)
+        heading_alignment = np.clip(heading_alignment, -1.0, 1.0)
+
+        # Metrics without a valid desired direction should not enter aggregate heading statistics.
+        heading_ref = np.where(heading_valid, heading_ref, np.nan)
+        heading_error = np.where(heading_valid, heading_error, np.nan)
+        heading_alignment = np.where(heading_valid, heading_alignment, np.nan)
+
+        # Tilt: angle between Z_body and Z_world
+        cos_tilt = np.clip(R[:, 2, 2], -1.0, 1.0)
+        tilt_angle = np.arccos(cos_tilt)
+
+        v_forward_body = vel_b[:, 0]
+        v_lateral_body = vel_b[:, 1]
+
+        # This is a kinematic sideslip proxy. It does not include wind.
+        body_speed_xy = np.linalg.norm(vel_b[:, :2], axis=1)
+        beta_kinematic = np.arctan2(vel_b[:, 1], vel_b[:, 0])
+
+        beta_kinematic = np.where(body_speed_xy > 0.05, beta_kinematic, np.nan)
+
+        # Rotor 5 thrust estimate (N) from actual rotor speed (rad/s) using the same kf
+        kf_5 = 8.54858e-6
+        omega_5 = actual_w[:, 4].astype(np.float64)
+
+        thrust_5 = kf_5 * omega_5**2
+
+        # Signed projection on the trajectory tangent.
+        thrust_5_along_ref = thrust_5 * heading_alignment
+
+        # Only the positive/progressive component.
+        thrust_5_useful = np.maximum(thrust_5_along_ref, 0.0)
+
+        # Actuator-disk slipstream estimate
+        rho = 1.225
+        prop_radius = 0.13
+        disk_area = np.pi * prop_radius**2
+
+        # Existing flow along the rotor axis.
+        v_axial_model = np.maximum(v_forward_body, 0.0)
+
+        v_induced_5 = 0.5 * (np.sqrt(v_axial_model**2 + 2.0 * thrust_5 / (rho * disk_area + 1e-9)) - v_axial_model)
+
+        wake_factor = 1.5
+        coverage_factor = 0.3
+
+        delta_v_slipstream = wake_factor * coverage_factor * v_induced_5
+
+        return {
+            "heading_deg": np.rad2deg(heading),
+            "heading_ref_deg": np.rad2deg(heading_ref),
+            "heading_error_deg": np.rad2deg(heading_error),
+            "heading_error_abs_deg": np.abs(
+                np.rad2deg(heading_error)
+            ),
+            "heading_alignment": heading_alignment,
+            "heading_valid": heading_valid.astype(np.float64),
+            "tilt_angle_deg": np.rad2deg(tilt_angle),
+            "v_forward_body": v_forward_body,
+            "v_lateral_body": v_lateral_body,
+            "beta_kinematic_deg": np.rad2deg(beta_kinematic),
+            "thrust_5": thrust_5,
+            "thrust_5_along_ref": thrust_5_along_ref,
+            "thrust_5_useful": thrust_5_useful,
+            "v_induced_5_est": v_induced_5,
+            "delta_v_slipstream_est": delta_v_slipstream,
+        }
 
     def sample(self):
         if self.global_step % self.record_every != 0:
@@ -504,6 +667,19 @@ class EpisodeTrajectoryRecorder:
 
             body_force, body_torque = self._get_body_force_torque_numpy(vehicle)
             cmd_w, actual_w = self._get_rotor_input_numpy(vehicle)
+            
+            glider_metrics = None
+
+            if self.is_shuttle_glider:
+                glider_metrics = (
+                    self._compute_shuttle_glider_metrics(
+                        state=state,
+                        goals=goals,
+                        ref_vel=ref_vel,
+                        actual_w=actual_w,
+                    )
+                )
+                
             l2f_action, l2f_cmd_rpm, l2f_current_rpm = self._get_l2f_debug_numpy(vehicle)
 
             cmd_rpm = cmd_w * 60.0 / (2.0 * np.pi)
@@ -512,9 +688,7 @@ class EpisodeTrajectoryRecorder:
             pos_error = np.linalg.norm(pos - goals, axis=1)
             z_error = goals[:, 2] - pos[:, 2]
 
-            att_err_ff, att_err_pd = self._compute_attitude_errors(
-                state, goals, ref_vel, ref_acc
-            )
+            att_err_ff, att_err_pd = self._compute_attitude_errors(state, goals, ref_vel, ref_acc)
 
             body_force_norm = np.linalg.norm(body_force, axis=1)
             body_torque_norm = np.linalg.norm(body_torque, axis=1)
@@ -568,6 +742,12 @@ class EpisodeTrajectoryRecorder:
                     row[f"l2f_action_{i}"]     = float(l2f_action[env_id, i])
                     row[f"l2f_cmd_rpm_{i}"]    = float(l2f_cmd_rpm[env_id, i])
                     row[f"l2f_current_rpm_{i}"]= float(l2f_current_rpm[env_id, i])
+                    
+                if self.is_shuttle_glider:
+                    for key in self.glider_metric_cols:
+                        row[key] = float(
+                            glider_metrics[key][env_id]
+                        )
 
                 self.traj_writer.writerow(row)
 
@@ -860,8 +1040,9 @@ def make_shuttle_glider_cfg():
     "rolling_moment_coefficient": [1e-06, 1e-06, 1e-06, 1e-06, 0.0],
     "rot_dir":                    [-1, -1, 1, 1, 1],
     "min_rotor_velocity":         [0, 0, 0, 0, 0],
-    "max_rotor_velocity":         [1400, 1400, 1400, 1400, 3500],
+    "max_rotor_velocity":         [1400, 1400, 1400, 1400, 1000], # 3500
     "motor_time_constant":        [0.008, 0.008, 0.008, 0.008, 0.0125],
+    "rotor_axes_body":            [[0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [1, 0, 0]]
 }
 
 
@@ -1299,6 +1480,7 @@ def main():
             reset_manager=reset_manager,
             trajectory=trajectory,
             n_rotors=n_rotors,
+            vehicle_type=vehicle_choice,
             use_tensorboard=False,
         )
 

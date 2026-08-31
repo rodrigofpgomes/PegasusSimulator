@@ -51,7 +51,7 @@ _VERTICAL_TAIL_PHYSICS_CFG = {
     "CL_max": 0.8,        # maximum magnitude of the side-force coefficient.
     "CD0": 0.03,          # zero-sideslip profile drag coefficient.
     "induced_k": 0.10,    # induced-drag coefficient.
-    "CD_crossflow": 1.0   # crossflow drag coefficient.
+    "CD_crossflow": 1.0,   # crossflow drag coefficient.
     "prop_radius": 0.13,  # Radius of the fifth rotor propeller in meters.
     "wake_factor": 1.5,   # factor to account for the wake expansion and decay of the propeller slipstream.
     "coverage_factor": 0.3 # factor to account for the fraction of the vertical tail covered by the propeller slipstream.
@@ -441,16 +441,9 @@ class QuadcopterEnv(PegasusEnv):
 
         # Compute the local air-relative velocity at the vertical-tail position.
         v_cp_base_b = v_com_b + torch.cross(omega_b,r_vtail, dim=-1) - wind_b
-    
-        # Read the actual angular velocity of the fifth rotor.
-        omega_5 = self.backend._vehicle._thrusters._velocity[:, 4]
-
-        # Read the thrust coefficient of the fifth rotor.
-        kf_5 = self.backend._vehicle._thrusters._rotor_constant[4]
         
-        # Add the fifth rotor's slipstream velocity to the tail airflow.
-        v_cp_b = self.puller_slipstream(omega_5=omega_5, v_cp_b=v_cp_base_b, kf_5=kf_5, rho=rho, prop_radius=0.13, wake_factor=1.5, coverage_factor=0.3)
-        
+        v_cp_b = v_cp_base_b.clone()
+           
         # Copy the tail airflow before removing the vertical component.
         v_xy = v_cp_b.clone()
         
