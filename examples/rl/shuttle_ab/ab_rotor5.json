@@ -1,0 +1,31 @@
+{
+  "_comment_1": "Manifesto A/B/C para o rotor 5. Copia para examples/rl/scripts/ab_rotor5.json",
+  "_comment_2": "As tres condicoes correm no MESMO mundo -> mesma referencia, mesmo physics_dt, mesmo reset. Comparacao emparelhada passo a passo, nao entre corridas.",
+  "_comment_3": "O SkrlAgentBackend faz _load_env(task) e instancia QuadcopterEnvCfg() SEM overrides do manifesto. A condicao tem de estar nos defaults do cfg de cada pasta de task -- e por isso que sao tres pastas, tal como ja fizeste com shuttle_glider_v3_obs_tail_no_rotor5.",
+  "_comment_4": "O campo 'name' vira a coluna 'controller' no trajectories.csv, que o csv_to_tost.py usa como run_tag. Mantem exatamente estes nomes.",
+
+  "vehicle": "shuttle_glider",
+  "vehicles": [
+    {
+      "name": "A_active",
+      "type": "sac_skrl",
+      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/sg_ab_A_active/logs/<RUN_A>/checkpoints/best_agent.pt",
+      "task": "shuttle_glider/sg_ab_A_active",
+      "preset": "isaac_lab"
+    },
+    {
+      "name": "B_dead",
+      "type": "sac_skrl",
+      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/sg_ab_B_dead/logs/<RUN_B>/checkpoints/best_agent.pt",
+      "task": "shuttle_glider/sg_ab_B_dead",
+      "preset": "isaac_lab"
+    },
+    {
+      "name": "C_removed",
+      "type": "sac_skrl",
+      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/sg_ab_C_removed/logs/<RUN_C>/checkpoints/best_agent.pt",
+      "task": "shuttle_glider/sg_ab_C_removed",
+      "preset": "isaac_lab"
+    }
+  ]
+}

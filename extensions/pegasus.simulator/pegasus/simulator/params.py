@@ -36,6 +36,7 @@ ROBOTS = {
     "Crazyflie_L2F": ROBOTS_ASSETS + "/Iris/cf2x_l2f.usda",
     "Shuttle": ROBOTS_ASSETS + "/Shuttle/shuttle.usda",
     "Shuttle_glider": ROBOTS_ASSETS + "/Shuttle/shuttle_glider.usda",
+    "Shuttle_glider_com": ROBOTS_ASSETS + "/Shuttle/shuttle_glider_com.usda",
 }
 
 #, "Flying Cube": ROBOTS_ASSETS + "/iris_cube.usda"}

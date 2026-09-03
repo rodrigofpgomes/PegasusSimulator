@@ -1,0 +1,487 @@
+"""
+| File: quadcopter_env.py (raptor_pretrain)
+| Description: Shuttle_glider 28D observation ablation without goal_acc.
+
+Observation (28 dims):
+    pos_error                (3) - position error in world frame (pos - goal / reference)
+    vel_error                (3) - velocity error in world frame
+    R_flat                   (9) - rotation matrix, row-major
+    ang_b                    (3) - angular velocity in body frame
+    self._action_history_obs (5) - previous normalised motor command (ActionHistory length=1)
+    rotor_speeds_norm        (5) - actual rotor speeds normalised to [-1, 1]
+
+Action (5 dims):
+    Normalised rotor velocity in [-1, 1], mapped to [min_w, max_w] = [0, 0, 0, 0, 0]..[1400, 1400, 1400, 1400, 3500].
+
+Reward (static weights, no curriculum):
+    r = constant - (w_pos*|pos_error| + w_vel*|vel_error| + w_d_action*|Δaction|). Termination penalty replaces the reward when the episode ends early. Cost is clipped at cost_clip=3.0.
+
+Trajectory: null/Langevin-like reference mixture with ping-pong replay (pos, vel, acc).
+
+Timing: decimation=1, sim_dt=0.01 -> 100 Hz, 500 steps = 5 s per episode.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from typing import Any
+import torch
+
+from pegasus.simulator.logic.rl.base_env import PegasusEnv, PegasusEnvCfg
+from pegasus.simulator.logic.rl.reset_manager import InitStateCfg
+from pegasus.simulator.logic.transforms import quaternion_to_matrix
+
+from .trajectory import RaptorLikeTrajectory
+
+
+_SHUTTLE_GLIDER_PHYSICS_CFG = {
+    "num_rotors": 5,
+    "rotor_constant":             [1.709716e-05, 1.709716e-05, 1.709716e-05, 1.709716e-05, 8.54858e-06],
+    "rolling_moment_coefficient": [1e-06, 1e-06, 1e-06, 1e-06, 0.0],
+    "rot_dir":                    [-1, -1, 1, 1, 1],
+    "min_rotor_velocity":         [0, 0, 0, 0, 0],
+    "max_rotor_velocity":         [1400, 1400, 1400, 1400, 1000],
+    "motor_time_constant":        [0.008, 0.008, 0.008, 0.008, 0.0125],
+}
+
+
+@dataclass
+class QuadcopterEnvCfg(PegasusEnvCfg):
+
+    # --- spaces ---
+    """Configuration for the quadcopter hover task: observation/action/state spaces, reward scales and termination bounds."""
+    observation_space: int = 31
+    action_space: int = 5
+    state_space: int = 0
+
+    # --- timing (100 Hz, 5 s episodes) ---
+    sim_dt: float = 0.01
+    decimation: int = 1
+    episode_length_s: float = 5.0
+
+    # --- vehicle ---
+    action_mode: str = "rotor_velocity_direct"
+    vehicle: str = "Shuttle_glider"
+
+    # Physics parameters forwarded to MultirotorBatchConfig (None = simulator defaults)
+    vehicle_physics_cfg: Any = field(default_factory=lambda: _SHUTTLE_GLIDER_PHYSICS_CFG)
+
+    # --- reward weights (RAPTOR sample_dynamics_parameters.cpp) ---
+    w_pos:      float = 1.0    # position squared error
+    w_vel:      float = 0.3    # velocity cost
+    w_d_action: float = 1.0    # delta-action squared (action smoothness)
+    # None  -> mantem o ||d_action|| unico sobre os 5 rotores (identico ao v3_obs_9).
+    # float -> separa: ||d_action[:, :4]||*w_d_action + |d_action[:, 4]|*w_d_action_5
+    #          Com o custo unico, modular o rotor 5 e penalizado exactamente como
+    #          modular a sustentacao -- ou seja, o comportamento que queremos e
+    #          activamente desincentivado.
+    w_d_action_5: float | None = 0.10
+    # Custo do angulo de inclinacao em radianos, acos(R[2,2]). 0.0 desliga.
+    w_tilt:     float = 2.0
+    constant:   float = 1.5
+    termination_penalty: float = 200.0
+    cost_clip:  float = 3.0
+
+    # --- termination + goal range: scaled from vehicle geometry at setup() ---
+    # RAPTOR: max_pos_error = max_rotor_distance * 20 (per axis)
+    #         goal_range     = max_rotor_distance * 10
+    # Set to None to trigger auto-scaling in setup(); override with a float to fix manually.
+    max_pos_error_per_axis: float = 3.0
+    max_lin_vel_per_axis: float = 8.0
+    max_ang_vel_per_axis: float = 35.0
+    min_upright: float = -0.17
+
+    use_raptor_trajectory: bool = True
+    # mixture: probabilidade de referência EM MOVIMENTO (1 - p_static)
+    trajectory_mixture_langevin_prob: float = 0.65
+    lemniscate_share: float = 0.23
+    # canal de velocidade (procura longitudinal)
+    traj_speed_min: float = 0.8
+    traj_speed_max: float = 2.4
+    traj_speed_sigma_frac: float = 0.55
+    traj_speed_tau: float = 1.5
+    # canal de rumo (procura lateral)
+    traj_yaw_rate_sigma: float = 0.45
+    traj_yaw_rate_tau: float = 3.5
+    # contenção e envelope
+    traj_home_radius: float = 1.8
+    traj_home_gain: float = 0.8
+    traj_max_speed: float = 4.5
+    # eixo vertical (mantém a mola de 2.ª ordem, mais suave)
+    langevin_gamma: float = 1.0
+    langevin_omega: float = 2.0
+    traj_sigma_z: float = 1.5
+
+    goal_pos_xy_range: list | None = None
+    goal_pos_z_range:  list | None = None
+
+    # --- initial state randomisation (RAPTOR init_90_deg) ---
+    randomize_init_state: bool = True
+    init_state_cfg: InitStateCfg = field(default_factory=lambda: InitStateCfg(max_angle_deg=90.0, guidance_prob=0.1))
+
+    # --- observation clamping during test/evaluation ---
+    test_mode: bool = False
+    clamp_observations_in_test: bool = True
+
+    obs_pos_error_limit: float = 3.0
+    obs_vel_error_limit: float = 8.0
+
+
+class QuadcopterEnv(PegasusEnv):
+    """Quadcopter hover task environment. See this phase's README for the exact reward formulation."""
+    cfg: QuadcopterEnvCfg
+
+    def __init__(self, cfg: QuadcopterEnvCfg, backend, reset_manager):
+        """Initializes the task: caches config/backend/reset-manager and allocates the per-episode reward logging buffers."""
+        super().__init__(cfg, backend, reset_manager)
+        self._last_action: torch.Tensor | None = None
+        self._prev_action: torch.Tensor | None = None
+        self._action_history_obs: torch.Tensor | None = None
+
+        self._trajectory = None
+
+        self._episode_sums: dict = {}
+
+    # ------------------------------------------------------------------
+    # Lifecycle
+    # ------------------------------------------------------------------
+
+    def setup(self):
+        """Allocates device buffers once the simulation timeline is active."""
+        super().setup()
+        self._last_action = torch.zeros((self.num_envs, self.cfg.action_space), device=self.device)
+        self._prev_action = torch.zeros_like(self._last_action)
+        self._action_history_obs = torch.zeros_like(self._last_action)
+        
+        self._episode_sums = {
+            k: torch.zeros(self.num_envs, device=self.device)
+            for k in ("pos", "vel", "d_action", "total",
+              "clip_hit", "die_pos", "die_vel", "die_ang", "vref_max", "v_max",
+              "d_action_5", "tilt", "thrust5_frac",
+              "cs_x", "cs_y", "cs_xy", "cs_xx", "cs_yy")
+        }
+
+        # Auto-scale termination and goal range from vehicle geometry (RAPTOR behaviour)
+        #rotor_pos = self.backend._vehicle._rotor_positions_body[0]  # (num_rotors, 3)
+        #max_rotor_dist = rotor_pos.norm(dim=1).max().item()
+        if self.cfg.max_pos_error_per_axis is None:
+            self.cfg.max_pos_error_per_axis = 1.0
+            # self.cfg.max_pos_error_per_axis = max_rotor_dist * 20.0
+        if self.cfg.goal_pos_xy_range is None:
+            # r = max_rotor_dist * 10.0
+            self.cfg.goal_pos_xy_range = [-0.5, 0.5]
+        if self.cfg.goal_pos_z_range is None:
+            # r = max_rotor_dist * 10.0
+            spawn_z = self.backend._vehicle._init_pos[0, 2].item()
+            self.cfg.goal_pos_z_range = [spawn_z - 0.5, spawn_z + 0.5]
+
+        #print(f"[QuadcopterEnv] max_rotor_dist={max_rotor_dist:.4f}m  "
+        #      f"termination={self.cfg.max_pos_error_per_axis:.3f}m  "
+        #      f"goal_xy={self.cfg.goal_pos_xy_range}  goal_z={self.cfg.goal_pos_z_range}")
+
+        self.backend.create_goal_markers(
+            root_path="/World/GoalMarkers", size=0.15, color=(1.0, 0.0, 0.0)
+        )
+
+        self.reset_manager.set_goal_cfg(self.cfg)
+
+        all_ids = torch.arange(self.num_envs, device=self.device)
+
+        if self.cfg.use_raptor_trajectory:
+            self._trajectory = RaptorLikeTrajectory(
+                num_envs=self.num_envs,
+                episode_steps=self.max_episode_length,
+                dt=self.cfg.sim_dt * self.cfg.decimation,
+                device=self.device,
+                gamma=self.cfg.langevin_gamma,
+                omega=self.cfg.langevin_omega,
+                mixture_langevin_prob=self.cfg.trajectory_mixture_langevin_prob,
+                lemniscate_share=self.cfg.lemniscate_share,
+                speed_min=self.cfg.traj_speed_min,
+                speed_max=self.cfg.traj_speed_max,
+                speed_sigma_frac=self.cfg.traj_speed_sigma_frac,
+                speed_tau=self.cfg.traj_speed_tau,
+                yaw_rate_sigma=self.cfg.traj_yaw_rate_sigma,
+                yaw_rate_tau=self.cfg.traj_yaw_rate_tau,
+                home_radius=self.cfg.traj_home_radius,
+                home_gain=self.cfg.traj_home_gain,
+                max_speed=self.cfg.traj_max_speed,
+                sigma_z=self.cfg.traj_sigma_z,
+            )
+            
+            centers = self.backend._vehicle._init_pos.to(
+                device=self.device, dtype=torch.float32
+            )
+
+            self._trajectory.reset(all_ids, centers)
+            self._sync_trajectory_reference(all_ids)
+        else:
+            self.reset_manager._randomize_goals(all_ids)
+
+
+    def _sync_trajectory_reference(self, env_ids: torch.Tensor | None = None):
+        """Updates the reference-trajectory target used by observations/rewards for the current step."""
+        if self._trajectory is None:
+            return
+
+        if env_ids is None:
+            env_ids = torch.arange(self.num_envs, device=self.device)
+
+        env_ids = env_ids.to(dtype=torch.long, device=self.device)
+
+        step_ids = self.episode_length_buf[env_ids].to(dtype=torch.long)
+
+        pos_ref, vel_ref, acc_ref = self._trajectory.current(env_ids, step_ids)
+    
+        self.reset_manager._goal_pos[env_ids] = pos_ref
+        self.reset_manager._goal_vel[env_ids] = vel_ref
+        self.reset_manager._goal_acc[env_ids] = acc_ref
+
+
+    # ------------------------------------------------------------------
+    # PegasusEnv interface
+    # ------------------------------------------------------------------
+
+    def _pre_physics_step(self, actions: torch.Tensor):
+        """Stores and rescales the raw policy actions before the physics substeps."""
+        action = actions.clamp(-1.0, 1.0)
+
+        self._prev_action = self._last_action.clone()
+        self._last_action = action
+
+        self._action_history_obs = action.clone()
+
+    def _apply_action(self):
+        """Map normalised action [-1,1] -> rotor velocity [min_w, max_w] and send."""
+        min_w = self.backend._vehicle._thrusters.min_rotor_velocity
+        max_w = self.backend._vehicle._thrusters.max_rotor_velocity
+        half = 0.5 * (max_w - min_w)
+        center = min_w + half
+        omega = self._last_action * half + center   # (N, 4)  rad/s
+        self.backend._input_reference = omega
+        self.backend._vehicle._thrusters.set_input_reference(omega)
+
+    def _get_observations(self) -> dict:
+        """Builds the observation dict for the policy (and critic, when a state space is defined)."""
+        self._sync_trajectory_reference()
+
+        state = self.backend.get_state()
+        pos   = state[:, 0:3]
+        vel_w = state[:, 3:6]
+        quat  = state[:, 6:10]   # w,x,y,z
+        ang_b = state[:, 10:13]
+
+        pos_error = pos - self.reset_manager.goal_pos
+        vel_error = vel_w - self.reset_manager.goal_vel
+
+        # Clamp observations only during test/evaluation
+        if self.cfg.test_mode and self.cfg.clamp_observations_in_test:
+            pos_error = pos_error.clamp(-self.cfg.obs_pos_error_limit, self.cfg.obs_pos_error_limit)
+            vel_error = vel_error.clamp(-self.cfg.obs_vel_error_limit, self.cfg.obs_vel_error_limit)
+
+        # goal_acc = self.reset_manager.goal_acc
+
+        R = quaternion_to_matrix(quat)
+        R_flat = R.reshape(self.num_envs, 9)
+
+        # Rotor speeds normalised to [-1, 1]: matches rl-tools RotorSpeeds observation
+        min_w = self.backend._vehicle._thrusters.min_rotor_velocity
+        max_w = self.backend._vehicle._thrusters.max_rotor_velocity
+        rpm   = self.backend._vehicle._thrusters._velocity  # (N, 4) actual rotor speeds
+        rotor_speeds_norm = (rpm - min_w) / (max_w - min_w) * 2.0 - 1.0
+
+        # Aceleracao exigida pela referencia, no referencial do corpo.
+        # E este o sinal sobre o qual o puller pode actuar, e foi exactamente
+        # este que a observacao 28D removeu ('without goal_acc').
+        acc_ref_b = torch.bmm(
+            R.transpose(1, 2), self.reset_manager.goal_acc.unsqueeze(-1)
+        ).squeeze(-1)
+
+        obs = torch.cat([pos_error, vel_error, R_flat, ang_b, self._action_history_obs, rotor_speeds_norm, acc_ref_b], dim=1)
+        return {"policy": obs}
+
+    def _get_rewards(self) -> torch.Tensor:
+        """Computes and logs the reward signal for the current timestep."""
+        self._sync_trajectory_reference()
+
+        state = self.backend.get_state()
+        pos = state[:, 0:3]
+        vel_w = state[:, 3:6]
+        quat  = state[:, 6:10]
+        ang_b = state[:, 10:13]
+
+        pos_error = pos - self.reset_manager.goal_pos
+        vel_error = vel_w - self.reset_manager.goal_vel
+
+        d_action = self._last_action - self._prev_action
+
+        pos_cost = torch.linalg.norm(pos_error, dim=1)
+        vel_cost = torch.linalg.norm(vel_error, dim=1)
+        if self.cfg.w_d_action_5 is None:
+            d_action_cost = torch.linalg.norm(d_action, dim=1)
+            d_action_5_cost = torch.zeros_like(d_action_cost)
+            d_cost = self.cfg.w_d_action * d_action_cost
+        else:
+            d_action_cost = torch.linalg.norm(d_action[:, :4], dim=1)
+            d_action_5_cost = d_action[:, 4].abs()
+            d_cost = (self.cfg.w_d_action * d_action_cost
+                      + self.cfg.w_d_action_5 * d_action_5_cost)
+
+        # Inclinacao em radianos. Usar acos e nao 1-cos: a 7 graus, 1-cos vale
+        # 0.008 e acos vale 0.12, ou seja, 15x mais visivel ao lado do pos_cost.
+        # Nao ha problema de gradiente: a recompensa nao e diferenciada.
+        R_rew = quaternion_to_matrix(quat)
+        tilt_cost = torch.acos(R_rew[:, 2, 2].clamp(-1.0 + 1e-6, 1.0 - 1e-6))
+
+        raw_cost = (self.cfg.w_pos * pos_cost + self.cfg.w_vel * vel_cost
+                    + d_cost + self.cfg.w_tilt * tilt_cost)
+        cost = raw_cost.clamp(max=self.cfg.cost_clip)        
+        self._episode_sums["clip_hit"] += (raw_cost >= self.cfg.cost_clip).float()
+
+        reward = self.cfg.constant - cost
+
+        d_pos = (pos_error.abs() > self.cfg.max_pos_error_per_axis).any(dim=1)
+        d_vel = (vel_w.abs()     > self.cfg.max_lin_vel_per_axis).any(dim=1)
+        d_ang = (ang_b.abs()     > self.cfg.max_ang_vel_per_axis).any(dim=1)
+        died = d_pos | d_vel | d_ang
+        self._episode_sums["die_pos"] += d_pos.float()
+        self._episode_sums["die_vel"] += d_vel.float()
+        self._episode_sums["die_ang"] += d_ang.float()
+
+        reward[died] = -self.cfg.termination_penalty
+
+        self._episode_sums["pos"] += -self.cfg.w_pos * pos_cost
+        self._episode_sums["vel"] += -self.cfg.w_vel * vel_cost
+        self._episode_sums["d_action"] += -self.cfg.w_d_action * d_action_cost
+        self._episode_sums["d_action_5"] += -(self.cfg.w_d_action_5 or 0.0) * d_action_5_cost
+        self._episode_sums["tilt"] += -self.cfg.w_tilt * tilt_cost
+        self._episode_sums["total"] += reward
+
+        # ---- diagnostico do rotor 5 -------------------------------------
+        thr = self.backend._vehicle._thrusters
+        kf5 = torch.as_tensor(thr._rotor_constant).to(self.device)[..., 4]
+        mw5 = torch.as_tensor(thr.max_rotor_velocity).to(self.device)[..., 4]
+        w5 = thr._velocity[:, 4]
+        f5 = kf5 * w5 * w5
+        self._episode_sums["thrust5_frac"] += f5 / (kf5 * mw5 * mw5)
+
+        # Acumuladores de Pearson entre o impulso do rotor 5 e a aceleracao
+        # exigida em X do corpo. Um bias constante da r ~ 0 por construcao;
+        # uma politica que usa o puller como propulsor da r > 0. E este o
+        # teste discriminante, nao o RMSE.
+        a_dem_x = torch.bmm(
+            R_rew.transpose(1, 2), self.reset_manager.goal_acc.unsqueeze(-1)
+        ).squeeze(-1)[:, 0]
+        self._episode_sums["cs_x"] += f5
+        self._episode_sums["cs_y"] += a_dem_x
+        self._episode_sums["cs_xy"] += f5 * a_dem_x
+        self._episode_sums["cs_xx"] += f5 * f5
+        self._episode_sums["cs_yy"] += a_dem_x * a_dem_x
+
+        vref = torch.linalg.norm(self.reset_manager.goal_vel, dim=1)
+        self._episode_sums["vref_max"] = torch.maximum(self._episode_sums["vref_max"], vref)
+        self._episode_sums["v_max"]    = torch.maximum(self._episode_sums["v_max"],
+                                                    torch.linalg.norm(vel_w, dim=1))
+
+        return reward
+        
+    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+
+        """Returns the (terminated, truncated) flags for the current timestep."""
+        state = self.backend.get_state()
+        pos   = state[:, 0:3]
+        vel_w = state[:, 3:6]
+        quat  = state[:, 6:10]
+        ang_b = state[:, 10:13]
+
+        R = quaternion_to_matrix(quat)
+
+        pos_error = pos - self.reset_manager.goal_pos
+        vel_error = vel_w - self.reset_manager.goal_vel
+ 
+        terminated = (pos_error.abs() > self.cfg.max_pos_error_per_axis).any(dim=1)
+        terminated |= (vel_w.abs() > self.cfg.max_lin_vel_per_axis).any(dim=1)
+        terminated |= (ang_b.abs() > self.cfg.max_ang_vel_per_axis).any(dim=1)
+
+        truncated = self.episode_length_buf >= self.max_episode_length - 1
+
+        return terminated, truncated
+
+    def _reset_idx(self, env_ids: torch.Tensor):
+        """Resets the selected environments and updates the logging statistics."""
+        if env_ids.numel() == 0:
+            return
+
+        state = self.backend.get_state()
+
+        final_dist = torch.linalg.norm(
+            self.reset_manager.goal_pos[env_ids] - state[env_ids, 0:3], dim=1
+        ).mean()
+
+        self.extras.setdefault("log", {})
+        self.extras["log"]["Metrics/final_distance_to_goal"] = final_dist
+        self.extras["log"]["Episode_Termination/died"]    = self.reset_terminated[env_ids].float().mean()
+        self.extras["log"]["Episode_Termination/timeout"] = self.reset_time_outs[env_ids].float().mean()
+
+        ep_len = self.episode_length_buf[env_ids].clamp(min=1).float()
+        self.extras["log"]["Metrics/clip_hit_frac"] = (self._episode_sums["clip_hit"][env_ids] / ep_len).mean()
+        self.extras["log"]["Metrics/episode_length"] = ep_len.mean()
+
+        _REWARD_KEYS = ("pos", "vel", "d_action", "d_action_5", "tilt", "total")
+
+        sx = self._episode_sums["cs_x"][env_ids]
+        sy = self._episode_sums["cs_y"][env_ids]
+        sxy = self._episode_sums["cs_xy"][env_ids]
+        sxx = self._episode_sums["cs_xx"][env_ids]
+        syy = self._episode_sums["cs_yy"][env_ids]
+        cov = sxy / ep_len - (sx / ep_len) * (sy / ep_len)
+        vx = (sxx / ep_len - (sx / ep_len) ** 2).clamp(min=0.0)
+        vy = (syy / ep_len - (sy / ep_len) ** 2).clamp(min=0.0)
+        corr = cov / torch.sqrt(vx * vy + 1e-12)
+        
+        mask = None
+        if self._trajectory is not None and hasattr(self._trajectory, "use_langevin"):
+            mask = self._trajectory.use_langevin[env_ids]
+        if mask is not None and mask.any():
+            self.extras["log"]["Metrics/corr_thrust5_accdem"] = corr[mask].mean()
+            self.extras["log"]["Metrics/thrust5_frac"] = (
+                self._episode_sums["thrust5_frac"][env_ids][mask] / ep_len[mask]).mean()
+        elif mask is None:
+            self.extras["log"]["Metrics/corr_thrust5_accdem"] = corr.mean()
+
+        for k, v in self._episode_sums.items():
+            if k.startswith("cs_") or k == "thrust5_frac":
+                self._episode_sums[k][env_ids] = 0.0
+                continue
+            group = "Episode_Reward" if k in _REWARD_KEYS else "Metrics"
+            self.extras["log"][f"{group}/{k}"] = v[env_ids].mean()
+            self._episode_sums[k][env_ids] = 0.0
+
+        if self._trajectory is not None:
+            self.reset_manager.reset_envs(
+                env_ids=env_ids,
+                randomize_goals=False,
+                randomize_state=self.cfg.randomize_init_state,
+            )
+        else:
+            self.reset_manager.reset_envs(
+                env_ids=env_ids,
+                randomize_goals=True,
+                randomize_state=self.cfg.randomize_init_state,
+            )
+
+        self.episode_length_buf[env_ids] = 0
+
+        if self._trajectory is not None:
+            centers = self.backend._vehicle._init_pos.to(device=self.device, dtype=torch.float32)
+            self._trajectory.reset(env_ids, centers)
+            self._sync_trajectory_reference(env_ids)
+
+        self.backend.update_goal_markers(self.reset_manager.goal_pos[env_ids], env_ids=env_ids)
+
+        self._action_history_obs[env_ids] = self.backend._vehicle._thrusters._reset_rotor_norm[env_ids]
+
+        self._last_action[env_ids] = 0.0
+        self._prev_action[env_ids] = 0.0
+
+        self._call_reset_callbacks(env_ids)

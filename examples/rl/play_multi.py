@@ -113,6 +113,7 @@ class LemniscateTrajectory:
     def _eval(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
         wt = self.w * t                             # (N,)
         sin_wt  = torch.sin(wt)
+        sin_2wt = torch.sin(2.0 * wt)
         cos_wt  = torch.cos(wt)
         cos_2wt = torch.cos(2.0 * wt)
 
@@ -127,7 +128,7 @@ class LemniscateTrajectory:
 
         acc = torch.zeros(self.n_envs, 3, dtype=torch.float32, device=self.device)
         acc[:, 0] = -self.A * self.w**2 * sin_wt
-        acc[:, 1] = -2.0 * self.A * self.w**2 * sin_wt * cos_wt
+        acc[:, 1] = -2.0 * self.A * self.w**2 * sin_2wt
         # vz = 0
 
         return pos, vel, acc
@@ -173,25 +174,6 @@ def _to_np_ref(value, n_envs: int):
         return np.full((n_envs, 3), np.nan, dtype=np.float32)
 
     return arr
-
-
-def make_reference_provider(reset_manager, n_envs: int):
-    def provider():
-        if reset_manager is None:
-            return {
-                "position": np.full((n_envs, 3), np.nan, dtype=np.float32),
-                "velocity": np.full((n_envs, 3), np.nan, dtype=np.float32),
-            }
-
-        ref_pos = _to_np_ref(reset_manager.goal_pos, n_envs)
-        ref_vel = np.zeros((n_envs, 3), dtype=np.float32)
-
-        return {
-            "position": ref_pos,
-            "velocity": ref_vel,
-        }
-
-    return provider
 
 
 # ---------------------------------------------------------------------

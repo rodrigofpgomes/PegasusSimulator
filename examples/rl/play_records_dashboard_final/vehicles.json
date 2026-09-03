@@ -2,18 +2,11 @@
   "vehicle": "shuttle_glider",
   "vehicles": [
     {
-      "name": "v4_obs_tail_norm2",
-      "type": "sac_skrl",
-      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v4_obs_tail_norm2/logs/26-08-27_16-06-34-175869_SACDelayed_delay_2/checkpoints/best_agent.pt",
-      "task": "shuttle_glider/shuttle_glider_v4_obs_tail_norm2",
-      "preset": "isaac_lab"
-    },
-    {
-      "name": "v4_obs_tail2",
-      "type": "sac_skrl",
-      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/shuttle_glider_v4_obs_tail2/logs/26-08-27_16-06-54-867090_SACDelayed_delay_2/checkpoints/best_agent.pt",
-      "task": "shuttle_glider/shuttle_glider_v4_obs_tail2",
-      "preset": "isaac_lab"
+      "name": "sg_f0_obs",
+      "type": "ppo",
+      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/sg_f0_obs/logs/26-09-03_11-10-11-016124_PPO/checkpoints/agent_48000.pt",
+      "task": "shuttle_glider/sg_f0_obs",
+      "preset": "test"
     }
   ]
 }

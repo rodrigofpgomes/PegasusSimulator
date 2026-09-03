@@ -179,7 +179,7 @@ def main():
     backend = RLBackend(n_vehicles=n_envs, action_mode=env_cfg.action_mode, device=device)
     physics_cfg = getattr(env_cfg, "vehicle_physics_cfg", None) or {}
     
-    if env_cfg.vehicle == "Shuttle_glider":
+    if env_cfg.vehicle == "Shuttle_glider" or env_cfg.vehicle == "Shuttle_glider_com":
         vehicle_cfg = ShuttleGliderBatchConfig(
             cfg=physics_cfg,
             n_vehicles=n_envs,

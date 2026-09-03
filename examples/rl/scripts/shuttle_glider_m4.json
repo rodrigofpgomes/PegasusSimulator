@@ -1,0 +1,6 @@
+{
+  "vehicle": "shuttle_glider",
+  "vehicles": [
+    { "name": "sg_f0_obs", "type": "ppo", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/sg_f0_obs/logs/26-09-03_11-10-11-016124_PPO/checkpoints/agent_48000.pt", "task": "shuttle_glider/sg_f0_obs", "preset": "test" }
+  ]
+}

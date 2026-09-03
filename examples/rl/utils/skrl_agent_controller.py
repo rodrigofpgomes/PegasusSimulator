@@ -173,7 +173,7 @@ class SkrlAgentBackend(RLBackend):
             env_cfg.use_raptor_trajectory = False
 
         if hasattr(env_cfg, "test_mode"):
-            env_cfg.test_mode = False  # disable the env's own test-mode reference generator
+            env_cfg.test_mode = True  # disable the env's own test-mode reference generator
 
         resolved_action_mode = getattr(env_cfg, "action_mode", action_mode)
 
