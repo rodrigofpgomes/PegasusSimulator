@@ -1,6 +1,5 @@
 #usda 1.0
 (
-
     customLayerData = {
         dictionary cameraSettings = {
             dictionary Front = {
@@ -28,8 +27,9 @@
         }
     }
     defaultPrim = "vehicle"
-    doc = "CAPTURE shuttle quadrotor (converted from Gazebo SDF by Luis Abrantes model). Pegasus Simulator format."
+    doc = "Shuttle in FLU, metres and kilograms. /vehicle and /vehicle/body retain the source base_link origin near the feet. Body lumps base_link and IMU. Four lift rotors remain independent rigid bodies. Body centerOfMass and the complete vehicle initial CoM are distinct; all mass properties are explicit. Shuttle geometry uses a roll of exactly pi/2 radians as requested by the user."
     endTimeCode = 100
+    kilogramsPerUnit = 1
     metersPerUnit = 1
     startTimeCode = 0
     timeCodesPerSecond = 24
@@ -38,6 +38,14 @@
 
 def Xform "vehicle" (
     apiSchemas = ["PhysicsArticulationRootAPI", "PhysxArticulationAPI"]
+    customData = {
+        dictionary referenceModel = {
+            string inertialSources = "Explicit links in attached vehicles.zip; external include models are unavailable."
+            double3 initialTotalCoM = (0, 0, 0.24237625851371752)
+            double initialTotalMass = 3.500007692307692
+            string surfaceTreatment = "Fixed geometry; source surface mass and inertia lumped into body at neutral configuration."
+        }
+    }
 )
 {
     token ui:displayName = "ShuttleDrone"
@@ -50,10 +58,11 @@ def Xform "vehicle" (
         apiSchemas = ["PhysicsMassAPI", "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI"]
     )
     {
-        point3f physics:centerOfMass = (0, 0, 0.24)
-        float3 physics:diagonalInertia = (0.021666666, 0.021666666, 0.04)
+        point3f physics:centerOfMass = (0, 0, 0.24017464)
+        float3 physics:diagonalInertia = (0.021700561, 0.021700561, 0.04001)
         bool physics:kinematicEnabled = 0
-        float physics:mass = 3.4207
+        float physics:mass = 3.4357
+        quatf physics:principalAxes = (1, 0, 0, 0)
         bool physics:rigidBodyEnabled = 1
         quatf xformOp:orient = (1, 0, 0, 0)
         double3 xformOp:scale = (1, 1, 1)
@@ -77,12 +86,14 @@ def Xform "vehicle" (
         apiSchemas = ["PhysicsMassAPI", "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI"]
     )
     {
+        point3f physics:centerOfMass = (0, 0, 0)
         float3 physics:diagonalInertia = (3.846491e-7, 0.000026115851, 0.000026498583)
         float physics:mass = 0.016076922
+        quatf physics:principalAxes = (1, 0, 0, 0)
         bool physics:rigidBodyEnabled = 1
         quatf xformOp:orient = (1, 0, 0, 0)
         double3 xformOp:scale = (1, 1, 1)
-        float3 xformOp:translate = (0.248, -0.248, 0.36)
+        double3 xformOp:translate = (0.248, -0.248, 0.36)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
         def Mesh "mesh"
@@ -110,12 +121,14 @@ def Xform "vehicle" (
         apiSchemas = ["PhysicsMassAPI", "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI"]
     )
     {
+        point3f physics:centerOfMass = (0, 0, 0)
         float3 physics:diagonalInertia = (3.846491e-7, 0.000026115851, 0.000026498583)
         float physics:mass = 0.016076922
+        quatf physics:principalAxes = (1, 0, 0, 0)
         bool physics:rigidBodyEnabled = 1
         quatf xformOp:orient = (1, 0, 0, 0)
         double3 xformOp:scale = (1, 1, 1)
-        float3 xformOp:translate = (-0.248, 0.248, 0.36)
+        double3 xformOp:translate = (-0.248, 0.248, 0.36)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
         def Mesh "mesh"
@@ -143,12 +156,14 @@ def Xform "vehicle" (
         apiSchemas = ["PhysicsMassAPI", "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI"]
     )
     {
+        point3f physics:centerOfMass = (0, 0, 0)
         float3 physics:diagonalInertia = (3.846491e-7, 0.000026115851, 0.000026498583)
         float physics:mass = 0.016076922
+        quatf physics:principalAxes = (1, 0, 0, 0)
         bool physics:rigidBodyEnabled = 1
         quatf xformOp:orient = (1, 0, 0, 0)
         double3 xformOp:scale = (1, 1, 1)
-        float3 xformOp:translate = (0.248, 0.248, 0.36)
+        double3 xformOp:translate = (0.248, 0.248, 0.36)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
         def Mesh "mesh"
@@ -176,12 +191,14 @@ def Xform "vehicle" (
         apiSchemas = ["PhysicsMassAPI", "PhysicsRigidBodyAPI", "PhysxRigidBodyAPI"]
     )
     {
+        point3f physics:centerOfMass = (0, 0, 0)
         float3 physics:diagonalInertia = (3.846491e-7, 0.000026115851, 0.000026498583)
         float physics:mass = 0.016076922
+        quatf physics:principalAxes = (1, 0, 0, 0)
         bool physics:rigidBodyEnabled = 1
         quatf xformOp:orient = (1, 0, 0, 0)
         double3 xformOp:scale = (1, 1, 1)
-        float3 xformOp:translate = (-0.248, -0.248, 0.36)
+        double3 xformOp:translate = (-0.248, -0.248, 0.36)
         uniform token[] xformOpOrder = ["xformOp:translate", "xformOp:orient", "xformOp:scale"]
 
         def Mesh "mesh"

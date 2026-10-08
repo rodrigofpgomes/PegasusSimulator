@@ -1,0 +1,13 @@
+{
+  "vehicle": "shuttle_glider2",
+  "vehicles": [
+    { "name": "c_task_4_04",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/vehicle_final/c_task5_all4/logs/w04/checkpoints/agent_120000.pt", "task": "shuttle_glider2/vehicle_final/c_task5_all4", "preset": "isaac_lab" },
+    { "name": "task5_all7_6",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/vehicle_final/task5_all7_6/logs/26-10-03_16-33-04-159195_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/vehicle_final/task5_all7_6", "preset": "isaac_lab" },
+    { "name": "task5_all7_6_01_00",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/vehicle_final/task5_all7_6_2/logs/26-10-04_18-04-15-042710_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/vehicle_final/task5_all7_6_2", "preset": "isaac_lab" },
+    { "name": "task5_all7_6_01_01",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/vehicle_final/task5_all7_6_2/logs/26-10-05_08-54-06-264834_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/vehicle_final/task5_all7_6_2", "preset": "isaac_lab" },
+    { "name": "v1_tracking",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/vehicle_final/task5_v1_tracking/logs/26-10-03_17-28-00-227954_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/vehicle_final/task5_v1_tracking", "preset": "isaac_lab" },
+    { "name": "v2_physical",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/vehicle_final/task5_v2_physical/logs/26-10-03_17-27-21-669790_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/vehicle_final/task5_v2_physical", "preset": "isaac_lab" },
+    { "name": "v3_offload",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/vehicle_final/task5_v3_offload/logs/26-10-05_10-19-49-550935_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/vehicle_final/task5_v3_offload", "preset": "isaac_lab" },
+    { "name": "v3_offload2",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/vehicle_final/task5_v3_offload2/logs/26-10-05_16-31-49-327315_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/vehicle_final/task5_v3_offload2", "preset": "isaac_lab" }
+    ]
+}

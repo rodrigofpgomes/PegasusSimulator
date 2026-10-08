@@ -1,0 +1,6 @@
+{
+  "vehicle": "shuttle_glider2",
+  "vehicles": [
+    { "name": "task4",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/task4/logs/26-09-18_23-22-41-265629_PPO2/checkpoints/agent_60000.pt", "task": "shuttle_glider2/task4", "preset": "isaac_lab" }
+  ]
+}

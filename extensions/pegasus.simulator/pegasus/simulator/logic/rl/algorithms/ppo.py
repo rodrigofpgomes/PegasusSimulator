@@ -39,10 +39,6 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     if cfg.get("state_preprocessor") is not None:
         cfg["state_preprocessor_kwargs"]["size"] = wrapped.observation_space
 
-    expected_num_envs = agent_cfg.get("expected_num_envs")
-    if (expected_num_envs is not None and wrapped.num_envs != expected_num_envs):
-        raise ValueError(f"Preset configured for {expected_num_envs} environments, " f"but received {wrapped.num_envs}")
-
     # Rollout memory (on-policy core)
     memory = RandomMemory(memory_size=cfg["rollouts"], num_envs=wrapped.num_envs, device=device)
 
@@ -50,14 +46,7 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     cfg["experiment"]["directory"] = log_dir
 
     # Agent Initialization
-    agent = PPO(
-        models=models,
-        memory=memory,
-        cfg=cfg,
-        observation_space=wrapped.observation_space,
-        action_space=wrapped.action_space,
-        device=device,
-    )
+    agent = PPO(models=models, memory=memory, cfg=cfg, observation_space=wrapped.observation_space, action_space=wrapped.action_space, device=device)
 
     if checkpoint is not None:
         agent.load(checkpoint)

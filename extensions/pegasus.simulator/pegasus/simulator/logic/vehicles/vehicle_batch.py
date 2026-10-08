@@ -519,13 +519,17 @@ class VehicleBatch():
         self._state.linear_acceleration[env_ids] = 0.0
 
         for backend in self._backends:
-            backend.set_state(
-                env_ids=env_ids,
-                positions=positions,
-                attitudes=attitudes,
-                linear_velocity=self._state.linear_velocity[env_ids],
-                angular_velocity=self._state.angular_velocity[env_ids],
-            )
+            if hasattr(backend, "set_state"):
+                backend.set_state(
+                    env_ids=env_ids,
+                    positions=positions,
+                    attitudes=attitudes,
+                    linear_velocity=self._state.linear_velocity[env_ids],
+                    angular_velocity=self._state.angular_velocity[env_ids],
+                )
+
+            else:
+                backend.update_state(self._state)
 
     
     # ------------------------------------------------------------------

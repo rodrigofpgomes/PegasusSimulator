@@ -1,0 +1,13 @@
+{
+  "vehicle": "shuttle_glider2",
+  "vehicles": [
+    { "name": "task_5_2",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/task5_all2_f/logs/26-09-27_13-48-41-542197_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/task5_all2_f", "preset": "isaac_lab" },
+    { "name": "task_5_3",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/task5_all3/logs/26-09-27_13-56-44-369709_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/task5_all3", "preset": "isaac_lab" },
+    { "name": "task_5_4",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/task5_all4/logs/26-09-27_16-51-44-759444_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/task5_all4", "preset": "isaac_lab" },
+    { "name": "task_5_4_2",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/task5_all4_2/logs/26-09-28_18-18-15-464642_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/task5_all4_2", "preset": "isaac_lab" },
+    { "name": "task_5_4_3",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/task5_all4_3/logs/26-09-28_18-19-21-289054_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/task5_all4_3", "preset": "isaac_lab" },
+    { "name": "task_5_4_4",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/task5_all4_4/logs/26-09-27_17-41-39-675234_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/task5_all4_4", "preset": "isaac_lab" },
+    { "name": "task_5_6",   "type": "ppo2", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider2/task5_all6/logs/26-09-28_16-58-59-696531_PPO2/checkpoints/agent_120000.pt", "task": "shuttle_glider2/task5_all6", "preset": "isaac_lab" }
+
+    ]
+}

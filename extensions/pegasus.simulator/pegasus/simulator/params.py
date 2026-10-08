@@ -32,14 +32,12 @@ ROBOTS = {
     "Iris": ROBOTS_ASSETS + "/Iris/iris.usd",
     "Iris_White": ROBOTS_ASSETS + "/Iris/iris_white.usd",
     "Crazyflie": ROBOTS_ASSETS + "/Iris/cf2x4.usd",
-    # L2F-exact: arm=0.028 m, mass=0.027 kg (lumped), J from crazy_flie.h
-    "Crazyflie_L2F": ROBOTS_ASSETS + "/Iris/cf2x_l2f.usda",
+    "Crazyflie_L2F": ROBOTS_ASSETS + "/Iris/cf2x_l2f.usda", # L2F exact: arm=0.028 m, mass=0.027 kg (lumped), J from crazy_flie.h
     "Shuttle": ROBOTS_ASSETS + "/Shuttle/shuttle.usda",
+    "Easyglider": ROBOTS_ASSETS + "/Easyglider/easyglider.usda",
     "Shuttle_glider": ROBOTS_ASSETS + "/Shuttle/shuttle_glider.usda",
-    "Shuttle_glider_com": ROBOTS_ASSETS + "/Shuttle/shuttle_glider_com.usda",
+    "Shuttle_glider2": ROBOTS_ASSETS + "/Shuttle/shuttle_glider2.usda",
 }
-
-#, "Flying Cube": ROBOTS_ASSETS + "/iris_cube.usda"}
 
 # Setup the default simulation environments path
 NVIDIA_ASSETS_PATH = str(nucleus.get_assets_root_path())

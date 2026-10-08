@@ -32,34 +32,34 @@ def discover_tasks():
     if not os.path.isdir(TASKS_DIR):
         return []
     tasks = []
+    
     for root, dirs, files in os.walk(TASKS_DIR):
         # Skip private/cache directories
         dirs[:] = [d for d in dirs if not d.startswith("_") and d != "agents"]
         if any(f.endswith("_env.py") for f in files):
             rel = os.path.relpath(root, TASKS_DIR)
             tasks.append(rel.replace(os.sep, "/"))
+            
     return sorted(tasks)
 
 def discover_algos():
     """Finds available algorithms dynamically."""
     repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
     algo_dir = os.path.join(repo_root, "extensions", "pegasus.simulator", "pegasus", "simulator", "logic", "rl", "algorithms")
-    if not os.path.isdir(algo_dir):
-        return ["ppo"]
-
+    
     algos = []
     for f in os.listdir(algo_dir):
         if not f.endswith(".py") or f.startswith("_"):
             continue
         algos.append(f[:-3])
 
-    return sorted(algos) or ["ppo"]
+    return sorted(algos)
 
 
 def parse_args():
     """Parses command line arguments for training."""
-    tasks = discover_tasks() or ["quadcopter"]
-    algos = discover_algos() or ["ppo"]
+    tasks = discover_tasks()
+    algos = discover_algos()
     p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--task",    required=True, choices=tasks)
     p.add_argument("--algo",    default="ppo", choices=algos)
@@ -88,6 +88,7 @@ from pxr import PhysxSchema
 from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
 from pegasus.simulator.logic.vehicles.multirotor_batch import MultirotorBatch, MultirotorBatchConfig
 from pegasus.simulator.logic.vehicles.shuttle_glider_batch import ShuttleGliderBatch, ShuttleGliderBatchConfig
+from pegasus.simulator.logic.vehicles.shuttle_glider_batch2 import ShuttleGliderBatch2, ShuttleGliderBatchConfig2
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.rl import RLBackend, ResetManager, GoalCfg, InitStateCfg
 
@@ -179,12 +180,12 @@ def main():
     backend = RLBackend(n_vehicles=n_envs, action_mode=env_cfg.action_mode, device=device)
     physics_cfg = getattr(env_cfg, "vehicle_physics_cfg", None) or {}
     
-    if env_cfg.vehicle == "Shuttle_glider" or env_cfg.vehicle == "Shuttle_glider_com":
-        vehicle_cfg = ShuttleGliderBatchConfig(
-            cfg=physics_cfg,
-            n_vehicles=n_envs,
-        )
+    if env_cfg.vehicle == "Shuttle_glider":
+        vehicle_cfg = ShuttleGliderBatchConfig(cfg=physics_cfg, n_vehicles=n_envs)
         VehicleClass = ShuttleGliderBatch
+    elif env_cfg.vehicle == "Shuttle_glider2":
+        vehicle_cfg = ShuttleGliderBatchConfig2(cfg=physics_cfg, n_vehicles=n_envs)
+        VehicleClass = ShuttleGliderBatch2
     else:
         vehicle_cfg = MultirotorBatchConfig(
             cfg=physics_cfg,

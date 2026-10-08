@@ -1,24 +1,22 @@
 #!/usr/bin/env python
 """
-dashboard_final.py - Unified multi-vehicle evaluation dashboard (final).
+| File: dashboard.py
+| Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
+| License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
+| Description: This file launches play_multi.py and lets you enable any subset of controllers
+                (RAPTOR Iris, RAPTOR Crazyflie, pre-train Iris, SAC Iris) in one shared world,
+                then records and inspects their trajectories live. Features:
+                • Controller selection (RAPTOR / Crazyflie toggles + pre-train and SAC checkpoints)
+                • Trajectory selector: static, figure-8, straight, longitudinal x-z, level turn or helix
+                • Fixed-wing-oriented controls for forward speed, turn radius, climb/descent and altitude
+                • XY and 3D trajectory plots: actual vs desired (controllers discovered from the CSV)
+                • Position-vs-time, velocity, rotor speed (rad/s) and body-force plots
+                • RMSE / mean / max error metrics per controller in the header
 
-Launches play_multi.py and lets you enable any subset of controllers
-(RAPTOR Iris, RAPTOR Crazyflie, pre-train Iris, SAC Iris) in one shared world,
-then records and inspects their trajectories live. Features:
-  • Controller selection (RAPTOR / Crazyflie toggles + pre-train and SAC checkpoints)
-  • Trajectory selector: static goal OR lemniscate (figure-8)
-  • Lemniscate parameter controls (amplitude, period, altitude)
-  • XY and 3D trajectory plots: actual vs desired (controllers discovered from the CSV)
-  • Position-vs-time, velocity, rotor RPM and body-force plots
-  • RMSE / mean / max error metrics per controller in the header
+                Records are written to ./play_records_dashboard/ on the same directory of this script.
 
-Records are written to ./play_records_dashboard_final/ next to this script.
-
-Run with:
-    python dashboard_final.py   →  http://127.0.0.1:8055
-
-Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
-License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
+                Run with:
+                    isaac_run dashboard_final.py -> http://127.0.0.1:8055
 """
 
 import math
@@ -72,9 +70,9 @@ DEFAULT_VEHICLES_JSON = json.dumps({
         {"name": "sac",      "type": "sac",      "checkpoint": "/path/to/sac/best_agent.pt"},
         {"name": "pretrain", "type": "pretrain", "checkpoint": "/path/to/pretrain.hdf5"},
         {"name": "sac_skrl", "type": "sac_skrl", "checkpoint": "/path/to/sac/best_agent.pt",
-         "task": "raptor_pretrain", "preset": "isaac_lab"},
+        "task": "raptor_pretrain", "preset": "isaac_lab"},
         {"name": "ppo",      "type": "ppo",      "checkpoint": "/path/to/ppo/best_agent.pt",
-         "task": "raptor_pretrain", "preset": "isaac_lab"},
+        "task": "raptor_pretrain", "preset": "isaac_lab"},
     ]
 }, indent=2)
 
@@ -398,44 +396,24 @@ def make_xy_fig(dff: pd.DataFrame, A: float, period: float, traj_type: str) -> g
     if dff.empty:
         return empty_fig("XY Trajectory")
 
-    # Desired reference curve (env 0, episode reference)
-    if traj_type == "lemniscate" and {"goal_x", "goal_y"}.issubset(dff.columns):
-        ref_row = dff[dff["controller"] == sorted(dff["controller"].unique())[0]].sort_values("t")
-        if not ref_row.empty:
-            # At t=0 the lemniscate is at its centre (sin(0)=0), so iloc[0] gives cx/cy exactly.
-            cx = float(ref_row["goal_x"].iloc[0])
-            cy = float(ref_row["goal_y"].iloc[0])
-            cz = float(ref_row["goal_z"].iloc[0]) if "goal_z" in ref_row.columns else 1.5
-            xs, ys, _ = lemniscate_curve(cx, cy, cz, A, period)
-            fig.add_trace(go.Scatter(x=xs, y=ys, mode="lines", name="desired", line=dict(color="#888", dash="dash", width=2)))
-    
-    elif traj_type == "static":
-        # Mark the static goal
-        ref_row = dff[dff["controller"] == sorted(dff["controller"].unique())[0]]
-        if not ref_row.empty and {"goal_x", "goal_y"}.issubset(ref_row.columns):
-            fig.add_trace(go.Scatter(
-                x=[float(ref_row["goal_x"].iloc[0])],
-                y=[float(ref_row["goal_y"].iloc[0])],
-                mode="markers", name="goal",
-                marker=dict(color="red", size=12, symbol="x"),
-            ))
+    ref = dff[dff["controller"] == sorted(dff["controller"].unique())[0]].sort_values("t")
+    if not ref.empty and {"goal_x", "goal_y"}.issubset(ref.columns):
+        if traj_type == "none":
+            fig.add_trace(go.Scatter(x=[float(ref["goal_x"].iloc[0])], y=[float(ref["goal_y"].iloc[0])],
+                                    mode="markers", name="goal",
+                                    marker=dict(color="red", size=12, symbol="x")))
+        else:
+            fig.add_trace(go.Scatter(x=ref["goal_x"], y=ref["goal_y"], mode="lines", name="desired",
+                                    line=dict(color="#888", dash="dash", width=2)))
 
-    # Actual trajectories per controller
     for ctrl in sorted(dff["controller"].unique()):
         d = dff[dff["controller"] == ctrl].sort_values("t")
-        fig.add_trace(go.Scatter(
-            x=d["x"], y=d["y"], mode="lines", name=ctrl,
-            line=dict(color=_ctrl_color(ctrl), width=2),
-        ))
+        fig.add_trace(go.Scatter(x=d["x"], y=d["y"], mode="lines", name=ctrl,
+                                line=dict(color=_ctrl_color(ctrl), width=2)))
 
-    fig.update_layout(
-        title="XY Trajectory - actual vs desired",
-        xaxis_title="x [m]", yaxis_title="y [m]",
-        yaxis_scaleanchor="x",
-        template="plotly_white",
-        legend=dict(orientation="h", y=-0.15),
-        uirevision="keep",
-    )
+    fig.update_layout(title="XY Trajectory - actual vs desired", xaxis_title="x [m]", yaxis_title="y [m]",
+                    yaxis_scaleanchor="x", template="plotly_white",
+                    legend=dict(orientation="h", y=-0.15), uirevision="keep")
     return fig
 
 
@@ -445,43 +423,25 @@ def make_3d_fig(dff: pd.DataFrame, A: float, period: float, traj_type: str) -> g
     if dff.empty:
         return empty_fig("3D Trajectory")
 
-    # Desired reference
-    if traj_type == "lemniscate" and {"goal_x", "goal_y", "goal_z"}.issubset(dff.columns):
-        ref_row = dff[dff["controller"] == sorted(dff["controller"].unique())[0]].sort_values("t")
-        if not ref_row.empty:
-            cx = float(ref_row["goal_x"].iloc[0])
-            cy = float(ref_row["goal_y"].iloc[0])
-            cz = float(ref_row["goal_z"].iloc[0])
-            xs, ys, zs = lemniscate_curve(cx, cy, cz, A, period)
-            fig.add_trace(go.Scatter3d(
-                x=xs, y=ys, z=zs, mode="lines", name="desired",
-                line=dict(color="#aaa", dash="dash", width=3),
-            ))
-    elif traj_type == "static":
-        ref_row = dff[dff["controller"] == sorted(dff["controller"].unique())[0]]
-        if not ref_row.empty and {"goal_x", "goal_y", "goal_z"}.issubset(ref_row.columns):
-            fig.add_trace(go.Scatter3d(
-                x=[float(ref_row["goal_x"].iloc[0])],
-                y=[float(ref_row["goal_y"].iloc[0])],
-                z=[float(ref_row["goal_z"].iloc[0])],
-                mode="markers", name="goal",
-                marker=dict(color="red", size=6, symbol="diamond"),
-            ))
+    ref = dff[dff["controller"] == sorted(dff["controller"].unique())[0]].sort_values("t")
+    if not ref.empty and {"goal_x", "goal_y", "goal_z"}.issubset(ref.columns):
+        if traj_type == "none":
+            fig.add_trace(go.Scatter3d(x=[float(ref["goal_x"].iloc[0])], y=[float(ref["goal_y"].iloc[0])],
+                                    z=[float(ref["goal_z"].iloc[0])], mode="markers", name="goal",
+                                    marker=dict(color="red", size=6, symbol="diamond")))
+        else:
+            fig.add_trace(go.Scatter3d(x=ref["goal_x"], y=ref["goal_y"], z=ref["goal_z"],
+                                    mode="lines", name="desired",
+                                    line=dict(color="#aaa", dash="dash", width=3)))
 
     for ctrl in sorted(dff["controller"].unique()):
         d = dff[dff["controller"] == ctrl].sort_values("t")
-        fig.add_trace(go.Scatter3d(
-            x=d["x"], y=d["y"], z=d["z"], mode="lines", name=ctrl,
-            line=dict(color=_ctrl_color(ctrl), width=4),
-        ))
+        fig.add_trace(go.Scatter3d(x=d["x"], y=d["y"], z=d["z"], mode="lines", name=ctrl,
+                                line=dict(color=_ctrl_color(ctrl), width=4)))
 
-    fig.update_layout(
-        title="3D Trajectory",
-        template="plotly_white",
-        scene=dict(xaxis_title="x [m]", yaxis_title="y [m]", zaxis_title="z [m]"),
-        legend=dict(orientation="h", y=-0.05),
-        uirevision="keep",
-    )
+    fig.update_layout(title="3D Trajectory", template="plotly_white",
+                    scene=dict(xaxis_title="x [m]", yaxis_title="y [m]", zaxis_title="z [m]"),
+                    legend=dict(orientation="h", y=-0.05), uirevision="keep")
     return fig
 
 
@@ -507,7 +467,7 @@ def make_ts_fig(dff: pd.DataFrame, y_col: str, title: str, y_title: str,
         ))
 
     fig.update_layout(title=title, xaxis_title="t [s]", yaxis_title=y_title,
-                      template="plotly_white", uirevision="keep")
+                    template="plotly_white", uirevision="keep")
     return fig
 
 
@@ -531,14 +491,14 @@ def make_pos_error_fig(dff: pd.DataFrame) -> go.Figure:
             ))
 
     fig.update_layout(title="Position error", xaxis_title="t [s]",
-                      yaxis_title="error [m]", template="plotly_white", uirevision="keep")
+                    yaxis_title="error [m]", template="plotly_white", uirevision="keep")
     return fig
 
 
 ROTOR_COLORS = ["#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
                 "#8c564b", "#e377c2", "#7f7f7f"]
 
-# --- Rotor RPM -----------------------------------------------------------
+# --- Rotor speed [rad/s] --------------------------------------------------
 def make_rotor_fig(dff: pd.DataFrame, prefix: str, title: str) -> go.Figure:
     fig = go.Figure()
     if dff.empty:
@@ -557,8 +517,8 @@ def make_rotor_fig(dff: pd.DataFrame, prefix: str, title: str) -> go.Figure:
                 x=d["t"], y=d[col], mode="lines", name=f"{ctrl} r{i}",
                 line=dict(color=ROTOR_COLORS[i % len(ROTOR_COLORS)], dash="dot"),
             ))
-    fig.update_layout(title=title, xaxis_title="t [s]", yaxis_title="RPM",
-                      template="plotly_white", uirevision="keep")
+    fig.update_layout(title=title, xaxis_title="t [s]", yaxis_title="rad/s",
+                    template="plotly_white", uirevision="keep")
     return fig
 
 
@@ -589,15 +549,15 @@ def make_att_error_fig(dff: pd.DataFrame) -> go.Figure:
             ))
 
     fig.update_layout(title="Attitude error  \u03a8 = trace(I - Rd\u1d40 R)",
-                      xaxis_title="t [s]", yaxis_title="\u03a8 [-]",
-                      template="plotly_white", uirevision="keep")
+                    xaxis_title="t [s]", yaxis_title="\u03a8 [-]",
+                    template="plotly_white", uirevision="keep")
     return fig
 
 
 # -------------------------------------------------------------------------
 # All figures bundle
 # -----------------------------------------s--------------------------------
-_N_FIGS = 19
+_N_FIGS = 24
 
 
 def make_multi_ts_fig(dff: pd.DataFrame, series, title: str, y_title: str) -> go.Figure:
@@ -648,8 +608,45 @@ def make_multi_ts_fig(dff: pd.DataFrame, series, title: str, y_title: str) -> go
 
 
 
+# --- Control surfaces -----------------------------------------------------
+def make_control_surfaces_fig(dff: pd.DataFrame, label: str) -> go.Figure:
+    title = f"Control surfaces | {label}"
+    columns = [
+        ("elevator_deg", "elevator"),
+        ("aileron_deg", "aileron"),
+        ("rudder_deg", "rudder"),
+    ]
+
+    fig = make_multi_ts_fig(dff, columns, title, "deflection [deg]")
+
+    if not any(column in dff.columns for column, _ in columns):
+        return fig
+
+    # Neutral command: no surface actuation.
+    fig.add_hline(y=0.0, line_dash="dash", line_color="#777", opacity=0.7)
+    return fig
+
+
+# --- Puller thrust vs forward speed (hybrid transition) -------------------
+def make_puller_vs_speed_fig(dff: pd.DataFrame) -> go.Figure:
+    title = "Puller thrust vs forward speed (hybrid transition)"
+    if dff.empty or "thrust_5" not in dff.columns or "v_forward_body" not in dff.columns:
+        return empty_fig(title)
+    fig = go.Figure()
+    for ctrl in sorted(dff["controller"].unique()):
+        d = dff[dff["controller"] == ctrl].sort_values("v_forward_body")
+        fig.add_trace(go.Scatter(
+            x=d["v_forward_body"], y=d["thrust_5"], mode="markers",
+            name=ctrl, marker=dict(color=_ctrl_color(ctrl), size=4, opacity=0.6),
+        ))
+    fig.update_layout(title=title, xaxis_title="v_forward_body [m/s]",
+                    yaxis_title="puller thrust [N]",
+                    template="plotly_white", uirevision="keep")
+    return fig
+
+
 def make_figures(df: pd.DataFrame, env_id: int, episode_id: int,
-                 traj_type: str, A: float, period: float):
+                traj_type: str, A: float, period: float):
     empty_all = tuple(empty_fig() for _ in range(_N_FIGS))
     if df.empty:
         return empty_all
@@ -671,8 +668,9 @@ def make_figures(df: pd.DataFrame, env_id: int, episode_id: int,
         make_ts_fig(dff, "vx",    f"Velocity X | {label}", "m/s",    ref_col="ref_vx"),
         make_ts_fig(dff, "vy",    f"Velocity Y | {label}", "m/s",    ref_col="ref_vy"),
         make_ts_fig(dff, "vz",    f"Velocity Z | {label}", "m/s",    ref_col="ref_vz"),
-        make_rotor_fig(dff, "cmd_rpm",    f"Commanded RPM | {label}"),
-        make_rotor_fig(dff, "actual_rpm", f"Actual RPM | {label}"),
+        make_rotor_fig(dff, "cmd_w",    f"Commanded rotor speed [rad/s] | {label}"),
+        make_rotor_fig(dff, "actual_w", f"Actual rotor speed [rad/s] | {label}"),
+        make_control_surfaces_fig(dff, label),
         make_ts_fig(dff, "body_force_norm",  f"Body force | {label}", "|F| [N]"),
         make_att_error_fig(dff),
         
@@ -680,7 +678,11 @@ def make_figures(df: pd.DataFrame, env_id: int, episode_id: int,
         make_ts_fig(dff, "heading_alignment", f"Heading alignment | {label}", "cos(e_heading) [-]"),
         make_multi_ts_fig(dff, [("thrust_5", "total"),("thrust_5_along_ref", "along trajectory"), ("thrust_5_useful", "useful")], f"Rotor 5 thrust | {label}", "thrust [N]"),
         make_ts_fig(dff, "tilt_angle_deg", f"Tilt angle | {label}", "tilt [deg]"),
-        make_multi_ts_fig(dff, [("v_forward_body", "forward"), ("v_lateral_body", "lateral")], f"Body-frame velocity | {label}", "velocity [m/s]")
+        make_multi_ts_fig(dff, [("v_forward_body", "forward"), ("v_lateral_body", "lateral")], f"Body-frame velocity | {label}", "velocity [m/s]"),
+        make_multi_ts_fig(dff, [("roll_deg", "roll"), ("pitch_deg", "pitch"), ("yaw_deg", "yaw")], f"Body attitude | {label}", "angle [deg]"),
+        make_multi_ts_fig(dff, [("aero_fx_body", "F_x"), ("aero_fy_body", "F_y"), ("aero_fz_body", "F_z")], f"Aerodynamic force (body) | {label}", "force [N]"),
+        make_multi_ts_fig(dff, [("aero_tx_body", "tau_x roll"), ("aero_ty_body", "tau_y pitch"), ("aero_tz_body", "tau_z yaw")], f"Aerodynamic moment about CoM | {label}", "moment [N m]"),
+        make_puller_vs_speed_fig(dff),
     )
 
 
@@ -694,11 +696,12 @@ _graph_ids = [
     "traj-xy", "traj-3d", "pos-error",
     "pos-x", "pos-y", "pos-z", "speed",
     "vel-x", "vel-y", "vel-z",
-    "cmd-rpm", "actual-rpm", "force-norm",
+    "cmd-w", "actual-w", "control-surfaces", "force-norm",
     "att-error",
     "heading-error", "heading-alignment",
     "thrust-5", "tilt-angle",
-    "body-velocity",
+    "body-velocity", "attitude-euler", "aero-force", "aero-torque",
+    "puller-vs-speed",
 ]
 
 _LABEL_STYLE  = {"fontWeight": "bold", "marginBottom": "2px"}
@@ -717,7 +720,7 @@ app.layout = html.Div(
         html.P("Select controllers, launch play_multi.py, record trajectories and inspect them live."),
 
         dcc.Store(id="run-dir-store"),
-        dcc.Store(id="traj-params-store", data={"type": "none", "A": 1.5, "period": 8.0, "z": 1.5}),
+        dcc.Store(id="traj-params-store", data={"type": "none", "A": 1.5, "period": 8.0, "z": 1.5, "speed": 1.5, "radius": 10.0, "z_amplitude": 0.30, "z_period": 8.0, "climb_rate": 0.15, "ramp_tau": 0.75, "z_ramp_tau": 2.5, "turn_direction": "left"}),
 
         # ---- Launcher controls ------------------------------------------------
         html.Details(open=True, children=[
@@ -729,7 +732,7 @@ app.layout = html.Div(
                 html.Div(style={"gridColumn": "span 2"}, children=[
                     html.Label("Isaac Python", style=_LABEL_STYLE),
                     dcc.Input(id="isaac-python", type="text", value=default_isaac_python(),
-                              style=_INPUT_STYLE),
+                            style=_INPUT_STYLE),
                 ]),
                 html.Div([
                     html.Label("Device", style=_LABEL_STYLE),
@@ -738,7 +741,7 @@ app.layout = html.Div(
                 html.Div([
                     html.Label("Headless", style=_LABEL_STYLE),
                     dcc.Checklist(id="headless", options=[{"label": "enable", "value": "yes"}],
-                                  value=["yes"]),
+                                value=["yes"]),
                 ]),
             ]),
 
@@ -747,55 +750,95 @@ app.layout = html.Div(
                 html.Div([
                     html.Label("N envs", style=_LABEL_STYLE),
                     dcc.Input(id="n-envs", type="number", value=1, min=1, step=1,
-                              style=_INPUT_STYLE),
+                            style=_INPUT_STYLE),
                 ]),
                 html.Div([
                     html.Label("Episode duration [s]", style=_LABEL_STYLE),
                     dcc.Input(id="episode-duration", type="number", value=20.0, min=1.0, step=1.0,
-                              style=_INPUT_STYLE),
+                            style=_INPUT_STYLE),
                 ]),
                 html.Div([
                     html.Label("Episodes per env", style=_LABEL_STYLE),
                     dcc.Input(id="num-episodes", type="number", value=3, min=1, step=1,
-                              style=_INPUT_STYLE),
+                            style=_INPUT_STYLE),
                 ]),
                 html.Div([
                     html.Label("Record every N steps", style=_LABEL_STYLE),
                     dcc.Input(id="record-every", type="number", value=1, min=1, step=1,
-                              style=_INPUT_STYLE),
+                            style=_INPUT_STYLE),
                 ]),
             ]),
 
             # Row 3: Trajectory selector + params
             html.Div(style={"marginBottom": "8px"}, children=[
                 html.Label("Trajectory type", style=_LABEL_STYLE),
-                dcc.RadioItems(
+                dcc.Dropdown(
                     id="traj-type",
                     options=[
-                        {"label": "Static goal", "value": "none"},
+                        {"label": "Static goal / hover", "value": "none"},
+                        {"label": "Straight level flight", "value": "straight"},
+                        {"label": "Longitudinal x-z (climb/descent)", "value": "longitudinal"},
+                        {"label": "Level turn", "value": "turn"},
+                        {"label": "Helical climbing turn", "value": "helix"},
                         {"label": "Lemniscate (figure-8)", "value": "lemniscate"},
                     ],
-                    value="lemniscate",
-                    inline=True,
+                    value="straight",
+                    clearable=False,
                     style={"marginBottom": "8px"},
                 ),
             ]),
 
-            html.Div(id="lemniscate-params-div", style=_SECTION_STYLE, children=[
-                html.Div([
-                    html.Label("Amplitude A [m]", style=_LABEL_STYLE),
-                    dcc.Input(id="traj-amplitude", type="number", value=1.5, min=0.1, step=0.1,
-                              style=_INPUT_STYLE),
+            html.Div(id="trajectory-params-div", style=_SECTION_STYLE, children=[
+                html.Div(id="param-z", children=[
+                    html.Label("Base altitude z [m]", style=_LABEL_STYLE),
+                    dcc.Input(id="traj-z", type="number", value=1.5, min=0.1, step=0.1, style=_INPUT_STYLE),
                 ]),
-                html.Div([
-                    html.Label("Period T [s]", style=_LABEL_STYLE),
-                    dcc.Input(id="traj-period", type="number", value=8.0, min=1.0, step=0.5,
-                              style=_INPUT_STYLE),
+                html.Div(id="param-speed", children=[
+                    html.Label("Forward speed [m/s]", style=_LABEL_STYLE),
+                    dcc.Input(id="traj-speed", type="number", value=1.5, min=0.0, step=0.1, style=_INPUT_STYLE),
                 ]),
-                html.Div([
-                    html.Label("Altitude z [m]", style=_LABEL_STYLE),
-                    dcc.Input(id="traj-z", type="number", value=1.5, min=0.1, step=0.1,
-                              style=_INPUT_STYLE),
+                html.Div(id="param-ramp-tau", children=[
+                    html.Label("Ramp tau [s]", style=_LABEL_STYLE),
+                    dcc.Input(id="traj-ramp-tau", type="number", value=0.75, min=0.05, step=0.05, style=_INPUT_STYLE),
+                ]),
+                html.Div(id="param-z-ramp-tau", children=[
+                    html.Label("Altitude ramp tau z [s]", style=_LABEL_STYLE),
+                    dcc.Input(id="traj-z-ramp-tau", type="number", value=0.0, min=0.00, step=0.1, style=_INPUT_STYLE),
+                ]),
+                html.Div(id="param-turn-direction", children=[
+                    html.Label("Turn direction", style=_LABEL_STYLE),
+                    dcc.Dropdown(id="traj-turn-direction",
+                                options=[{"label": "Left", "value": "left"}, {"label": "Right", "value": "right"}],
+                                value="left", clearable=False),
+                ]),
+                html.Div(id="param-radius", children=[
+                    html.Label("Turn radius R [m]", style=_LABEL_STYLE),
+                    dcc.Input(id="traj-radius", type="number", value=10.0, min=0.0, step=0.5, style=_INPUT_STYLE),
+                ]),
+                html.Div(id="param-z-amplitude", children=[
+                    html.Label("Vertical amplitude Az [m]", style=_LABEL_STYLE),
+                    dcc.Input(id="traj-z-amplitude", type="number", value=0.30, min=0.0, step=0.05, style=_INPUT_STYLE),
+                ]),
+                html.Div(id="param-z-period", children=[
+                    html.Label("Vertical period Tz [s]", style=_LABEL_STYLE),
+                    dcc.Input(id="traj-z-period", type="number", value=8.0, min=0.5, step=0.5, style=_INPUT_STYLE),
+                ]),
+                html.Div(id="param-climb-rate", children=[
+                    html.Label("Helix climb rate [m/s]", style=_LABEL_STYLE),
+                    dcc.Input(id="traj-climb-rate", type="number", value=0.15, step=0.05, style=_INPUT_STYLE),
+                ]),
+                html.Div(id="param-amplitude", children=[
+                    html.Label("Lemniscate amplitude A [m]", style=_LABEL_STYLE),
+                    dcc.Input(id="traj-amplitude", type="number", value=1.5, min=0.1, step=0.1, style=_INPUT_STYLE),
+                ]),
+                html.Div(id="param-period", children=[
+                    html.Label("Lemniscate period T [s]", style=_LABEL_STYLE),
+                    dcc.Input(id="traj-period", type="number", value=8.0, min=1.0, step=0.5, style=_INPUT_STYLE),
+                ]),
+                html.Div(id="param-turn-hint",
+                        style={"gridColumn": "span 2", "fontSize": "12px", "color": "#555"},
+                        children=[
+                    html.Span("Suggested turn tests: wide turn V=1.5 m/s, R=12 m; moderate turn V=1.8 m/s, R=5 m.")
                 ]),
             ]),
 
@@ -803,14 +846,14 @@ app.layout = html.Div(
                 html.Div([
                     html.Label("Goal XY range [m]  (e.g. -2  2)", style=_LABEL_STYLE),
                     html.Div(style={"display": "flex", "gap": "4px"}, children=[
-                        dcc.Input(id="goal-xy-low",  type="number", placeholder="low",  style={"width": "50%"}),
+                        dcc.Input(id="goal-xy-low", type="number", placeholder="low", style={"width": "50%"}),
                         dcc.Input(id="goal-xy-high", type="number", placeholder="high", style={"width": "50%"}),
                     ]),
                 ]),
                 html.Div([
                     html.Label("Goal Z range [m]  (e.g. 0.5  1.5)", style=_LABEL_STYLE),
                     html.Div(style={"display": "flex", "gap": "4px"}, children=[
-                        dcc.Input(id="goal-z-low",  type="number", placeholder="low",  style={"width": "50%"}),
+                        dcc.Input(id="goal-z-low", type="number", placeholder="low", style={"width": "50%"}),
                         dcc.Input(id="goal-z-high", type="number", placeholder="high", style={"width": "50%"}),
                     ]),
                 ]),
@@ -821,11 +864,12 @@ app.layout = html.Div(
             html.Div(style=_SECTION_STYLE, children=[
                 html.Div(style={"gridColumn": "span 2"}, children=[
                     dcc.Dropdown(id="vehicle-model",
-                                 options=[{"label": "Iris", "value": "iris"},
-                                          {"label": "Crazyflie", "value": "crazyflie"},
-                                          {"label": "Shuttle", "value": "shuttle"},
-                                          {"label": "Shuttle_glider", "value": "shuttle_glider"}],
-                                 value="iris", clearable=False),
+                                options=[{"label": "Iris", "value": "iris"},
+                                        {"label": "Crazyflie", "value": "crazyflie"},
+                                        {"label": "Shuttle", "value": "shuttle"},
+                                        {"label": "Shuttle_glider", "value": "shuttle_glider"},
+                                        {"label": "Shuttle_glider2", "value": "shuttle_glider2"}],
+                                value="iris", clearable=False),
                 ]),
             ]),
 
@@ -835,30 +879,30 @@ app.layout = html.Div(
             html.Div(style=_SECTION_STYLE, children=[
                 html.Div(style={"gridColumn": "span 4"}, children=[
                     html.Label("Controllers manifest (JSON) - one entry per controller",
-                               style=_LABEL_STYLE),
+                            style=_LABEL_STYLE),
                     dcc.Textarea(id="vehicles-json", value=DEFAULT_VEHICLES_JSON,
-                                 style={"width": "100%", "height": "200px",
+                                style={"width": "100%", "height": "200px",
                                         "fontFamily": "monospace", "fontSize": "12px"}),
                     html.Div("Each entry: name (unique), type "
-                             "(raptor|pretrain|sac|ppo|sac_skrl|nonlinear), checkpoint (path or null). "
-                             "sac/pretrain/ppo/sac_skrl need a checkpoint; raptor and nonlinear do not. "
-                             "ppo and sac_skrl run the full skrl agent like play.py and also "
-                             "need 'task' (+ optional 'preset'). All controllers use the "
-                             "vehicle model above.",
-                             style={"fontSize": "11px", "color": "#777", "marginTop": "4px"}),
+                            "(raptor|pretrain|sac|ppo|sac_skrl|nonlinear), checkpoint (path or null). "
+                            "sac/pretrain/ppo/sac_skrl need a checkpoint; raptor and nonlinear do not. "
+                            "ppo and sac_skrl run the full skrl agent like play.py and also "
+                            "need 'task' (+ optional 'preset'). All controllers use the "
+                            "vehicle model above.",
+                            style={"fontSize": "11px", "color": "#777", "marginTop": "4px"}),
                 ]),
             ]),
 
             html.Div(style={"display": "flex", "gap": "8px", "marginTop": "8px"}, children=[
                 html.Button("▶ Start run", id="start-button", n_clicks=0,
                             style={"background": "#1f77b4", "color": "white",
-                                   "border": "none", "padding": "8px 18px", "cursor": "pointer"}),
+                                "border": "none", "padding": "8px 18px", "cursor": "pointer"}),
                 html.Button("■ Stop run",  id="stop-button",  n_clicks=0,
                             style={"background": "#d62728", "color": "white",
-                                   "border": "none", "padding": "8px 18px", "cursor": "pointer"}),
+                                "border": "none", "padding": "8px 18px", "cursor": "pointer"}),
             ]),
             html.Div(id="status", style={"marginTop": "10px", "fontWeight": "bold",
-                                          "color": "#555"}),
+                                        "color": "#555"}),
         ]),
 
         html.Hr(),
@@ -872,7 +916,7 @@ app.layout = html.Div(
                 html.Div([
                     html.Label("Metrics", style=_LABEL_STYLE),
                     html.Div(id="metrics-text",
-                             style={"fontSize": "12px", "color": "#333",
+                            style={"fontSize": "12px", "color": "#333",
                                     "paddingTop": "6px", "fontFamily": "monospace", 
                                     "whiteSpace": "pre-wrap", "overflowWrap": "anywhere"})
                 ]),
@@ -884,35 +928,35 @@ app.layout = html.Div(
         # ---- Trajectory plots ------------------------------------------------
         html.H3("Trajectory - actual vs desired"),
         html.Div(style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "8px"},
-                 children=[
-                     dcc.Graph(id="traj-xy", style={"height": "520px"}),
-                     dcc.Graph(id="traj-3d", style={"height": "520px"}),
-                 ]),
+                children=[
+                    dcc.Graph(id="traj-xy", style={"height": "520px"}),
+                    dcc.Graph(id="traj-3d", style={"height": "520px"}),
+                ]),
 
         # ---- Position & error -----------------------------------------------
         html.H3("Position"),
         html.Div(style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "8px"},
-                 children=[
-                     dcc.Graph(id="pos-x"), dcc.Graph(id="pos-y"),
-                     dcc.Graph(id="pos-z"), dcc.Graph(id="pos-error"),
-                 ]),
+                children=[
+                    dcc.Graph(id="pos-x"), dcc.Graph(id="pos-y"),
+                    dcc.Graph(id="pos-z"), dcc.Graph(id="pos-error"),
+                ]),
 
         # ---- Velocity -------------------------------------------------------
         html.H3("Velocity"),
         html.Div(style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "8px"},
-                 children=[
-                     dcc.Graph(id="speed"),
-                     dcc.Graph(id="vel-x"),
-                     dcc.Graph(id="vel-y"),
-                     dcc.Graph(id="vel-z"),
-                 ]),
+                children=[
+                    dcc.Graph(id="speed"),
+                    dcc.Graph(id="vel-x"),
+                    dcc.Graph(id="vel-y"),
+                    dcc.Graph(id="vel-z"),
+                ]),
 
         # ---- Rotors --------------------------------------------------------
-        html.H3("Rotor RPM"),
+        html.H3("Rotor speed [rad/s]"),
         html.Div(style={"display": "grid", "gridTemplateColumns": "1fr 1fr", "gap": "8px"},
-                 children=[
-                     dcc.Graph(id="cmd-rpm"), dcc.Graph(id="actual-rpm"),
-                 ]),
+                children=[
+                    dcc.Graph(id="cmd-w"), dcc.Graph(id="actual-w"),
+                ]),
 
         # ---- Forces --------------------------------------------------------
         html.H3("Body forces"),
@@ -931,11 +975,16 @@ app.layout = html.Div(
                 "gap": "8px",
             },
             children=[
+                dcc.Graph(id="control-surfaces"),
                 dcc.Graph(id="heading-error"),
                 dcc.Graph(id="heading-alignment"),
                 dcc.Graph(id="thrust-5"),
                 dcc.Graph(id="tilt-angle"),
                 dcc.Graph(id="body-velocity"),
+                dcc.Graph(id="attitude-euler"),
+                dcc.Graph(id="aero-force"),
+                dcc.Graph(id="aero-torque"),
+                dcc.Graph(id="puller-vs-speed"),
             ],
         ),
 
@@ -954,20 +1003,51 @@ app.layout = html.Div(
 # Callbacks
 # -------------------------------------------------------------------------
 
-# Show/hide param panels depending on mode
+# Show/hide trajectory/static parameter panels depending on mode
+# Which parameter blocks are relevant for each trajectory type.
+_TRAJ_PARAM_MAP = {
+    "straight":     {"param-z", "param-speed", "param-ramp-tau", "param-z-ramp-tau"},
+    "longitudinal": {"param-z", "param-speed", "param-ramp-tau", "param-z-ramp-tau", "param-z-amplitude", "param-z-period"},
+    "turn":         {"param-z", "param-speed", "param-ramp-tau", "param-z-ramp-tau", "param-turn-direction", "param-radius", "param-turn-hint"},
+    "helix":        {"param-z", "param-speed", "param-ramp-tau", "param-z-ramp-tau", "param-turn-direction", "param-radius", "param-climb-rate", "param-turn-hint"},
+    "lemniscate":   {"param-z", "param-z-ramp-tau", "param-amplitude", "param-period"},
+    "none":         set(),
+}
+
+# Base style kept for specific blocks when they are visible.
+_PARAM_BASE_STYLE = {
+    "param-turn-hint": {"gridColumn": "span 2", "fontSize": "12px", "color": "#555"},
+}
+
+_PARAM_IDS = [
+    "param-z", "param-speed", "param-ramp-tau", "param-z-ramp-tau", "param-turn-direction",
+    "param-radius", "param-z-amplitude", "param-z-period", "param-climb-rate",
+    "param-amplitude", "param-period", "param-turn-hint",
+]
+
+
+# Show only the parameter inputs relevant to the selected trajectory.
 @app.callback(
-    Output("lemniscate-params-div", "style"),
-    Output("static-params-div",     "style"),
+    Output("trajectory-params-div", "style"),
+    Output("static-params-div", "style"),
+    *[Output(pid, "style") for pid in _PARAM_IDS],
     Input("traj-type", "value"),
 )
 def toggle_params(traj_type):
-    active   = dict(_SECTION_STYLE)
-    inactive = dict(_SECTION_STYLE, opacity="0.3", pointerEvents="none")
-    if traj_type == "lemniscate":
-        return active, inactive
-    else:
-        return inactive, active
+    active = dict(_SECTION_STYLE)
+    hidden = {"display": "none"}
 
+    is_static = (traj_type == "none")
+    traj_div_style = hidden if is_static else active
+    static_div_style = active if is_static else hidden
+
+    visible = _TRAJ_PARAM_MAP.get(traj_type, set())
+    param_styles = [
+        dict(_PARAM_BASE_STYLE.get(pid, {})) if pid in visible else hidden
+        for pid in _PARAM_IDS
+    ]
+
+    return (traj_div_style, static_div_style, *param_styles)
 
 # Start / stop simulation
 @app.callback(
@@ -987,6 +1067,14 @@ def toggle_params(traj_type):
     State("traj-amplitude",  "value"),
     State("traj-period",     "value"),
     State("traj-z",          "value"),
+    State("traj-speed",      "value"),
+    State("traj-radius",     "value"),
+    State("traj-z-amplitude","value"),
+    State("traj-z-period",   "value"),
+    State("traj-climb-rate", "value"),
+    State("traj-ramp-tau",   "value"),
+    State("traj-z-ramp-tau", "value"),
+    State("traj-turn-direction", "value"),
     State("goal-xy-low",     "value"),
     State("goal-xy-high",    "value"),
     State("goal-z-low",      "value"),
@@ -999,6 +1087,7 @@ def control_run(
     _start, _stop,
     isaac_python, n_envs, episode_duration, num_episodes, record_every, device, headless,
     traj_type, traj_amplitude, traj_period, traj_z,
+    traj_speed, traj_radius, traj_z_amplitude, traj_z_period, traj_climb_rate, traj_ramp_tau, traj_z_ramp_tau, traj_turn_direction,
     goal_xy_low, goal_xy_high, goal_z_low, goal_z_high,
     vehicles_json, vehicle_model,
 ):
@@ -1007,10 +1096,18 @@ def control_run(
     trigger = callback_context.triggered[0]["prop_id"].split(".")[0]
 
     traj_params = {
-        "type":   traj_type   or "none",
-        "A":      float(traj_amplitude or 1.5),
-        "period": float(traj_period    or 8.0),
-        "z":      float(traj_z         or 1.5),
+        "type": traj_type or "none",
+        "A": float(traj_amplitude or 1.5),
+        "period": float(traj_period or 8.0),
+        "z": float(traj_z or 1.5),
+        "speed": float(traj_speed or 1.5),
+        "radius": float(traj_radius),
+        "z_amplitude": float(traj_z_amplitude or 0.30),
+        "z_period": float(traj_z_period or 8.0),
+        "climb_rate": float(traj_climb_rate or 0.15),
+        "ramp_tau": float(traj_ramp_tau or 0.75),
+        "z_ramp_tau": float(traj_z_ramp_tau if traj_z_ramp_tau is not None else 2.5),
+        "turn_direction": traj_turn_direction or "left",
     }
 
     if trigger == "stop-button":
@@ -1046,7 +1143,7 @@ def control_run(
     vehicles = manifest.get("vehicles") if isinstance(manifest, dict) else manifest
     if not vehicles:
         return no_update, traj_params, "Vehicles manifest has no 'vehicles' entries."
-    _known_types = {"raptor", "pretrain", "sac", "ppo", "sac_skrl", "nonlinear"}
+    _known_types = {"raptor", "pretrain", "sac", "ppo", "ppo2", "sac_skrl", "nonlinear"}
     _seen = set()
     for i, entry in enumerate(vehicles):
         nm = entry.get("name")
@@ -1057,9 +1154,9 @@ def control_run(
         _seen.add(nm)
         if entry.get("type") not in _known_types:
             return no_update, traj_params, f"Controller '{nm}': unknown type '{entry.get('type')}'."
-        if entry.get("type") in ("sac", "pretrain", "ppo", "sac_skrl") and not entry.get("checkpoint"):
+        if entry.get("type") in ("sac", "pretrain", "ppo", "ppo2", "sac_skrl") and not entry.get("checkpoint"):
             return no_update, traj_params, f"Controller '{nm}' ({entry.get('type')}) needs a 'checkpoint'."
-        if entry.get("type") in ("ppo", "sac_skrl") and not entry.get("task"):
+        if entry.get("type") in ("ppo", "ppo2", "sac_skrl") and not entry.get("task"):
             return no_update, traj_params, f"Controller '{nm}' ({entry.get('type')}) needs a 'task' (skrl agent config, like play.py)."
 
     # Single fixed temporary folder: reused and wiped clean on every run so only
@@ -1094,11 +1191,19 @@ def control_run(
     if "yes" in (headless or []):
         cmd.append("--headless")
 
-    if traj_params["type"] == "lemniscate":
+    if traj_params["type"] != "none":
         cmd += [
             "--traj_amplitude", str(traj_params["A"]),
-            "--traj_period",    str(traj_params["period"]),
-            "--traj_z",         str(traj_params["z"]),
+            "--traj_period", str(traj_params["period"]),
+            "--traj_z", str(traj_params["z"]),
+            "--traj_speed", str(traj_params["speed"]),
+            "--traj_radius", str(traj_params["radius"]),
+            "--traj_z_amplitude", str(traj_params["z_amplitude"]),
+            "--traj_z_period", str(traj_params["z_period"]),
+            "--traj_climb_rate", str(traj_params["climb_rate"]),
+            "--traj_ramp_tau", str(traj_params["ramp_tau"]),
+            "--traj_z_ramp_tau", str(traj_params["z_ramp_tau"]),
+            "--traj_turn_direction", str(traj_params["turn_direction"]),
         ]
     else:
         if goal_xy_low is not None and goal_xy_high is not None:
@@ -1173,7 +1278,7 @@ def update_graphs(_, run_dir, env_id, episode_id, traj_params):
     if not run_dir or env_id is None or episode_id is None:
         return empty_all
 
-    params = traj_params or {"type": "none", "A": 1.5, "period": 8.0, "z": 1.5}
+    params = traj_params or {"type": "none", "A": 1.5, "period": 8.0, "z": 1.5, "speed": 1.5, "radius": 10.0}
     traj_type = params.get("type", "none")
     A      = float(params.get("A",      1.5))
     period = float(params.get("period", 8.0))

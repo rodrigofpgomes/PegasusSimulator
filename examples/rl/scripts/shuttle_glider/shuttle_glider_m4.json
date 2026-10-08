@@ -1,0 +1,9 @@
+{
+  "vehicle": "shuttle_glider",
+  "vehicles": [
+    { "name": "sg_f0_obs", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/sg_f0_obs/logs/26-09-03_11-01-43-278323_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "shuttle_glider/sg_f0_obs", "preset": "isaac_lab" },
+    { "name": "sg_f1_use", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/sg_f1_use/logs/26-09-03_14-08-13-343022_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "shuttle_glider/sg_f1_use", "preset": "isaac_lab" },
+    { "name": "sg_f2_level", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/sg_f2_level/logs/26-09-03_14-08-51-817331_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "shuttle_glider/sg_f2_level", "preset": "isaac_lab" },
+    { "name": "sg_f3_body", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle_glider/sg_f3_body/logs/26-09-03_14-07-26-120931_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "shuttle_glider/sg_f3_body", "preset": "isaac_lab" }
+  ]
+}

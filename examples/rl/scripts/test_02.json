@@ -1,0 +1,8 @@
+{
+  "vehicle": "crazyflie",
+  "vehicles": [
+    { "name": "raptor",   "type": "raptor",   "checkpoint": null },
+    { "name": "v1_skrl_shared",      "type": "ppo",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/double_integrator/01_isaac_lab2/logs/skrl_shared/checkpoints/best_agent.pt", "task": "double_integrator/01_isaac_lab2", "preset": "isaac_lab" },
+    { "name": "v2_rslrl",      "type": "ppo2",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/double_integrator/01_isaac_lab2/logs/rslrl/checkpoints/best_agent.pt", "task": "double_integrator/01_isaac_lab2", "preset": "isaac_lab" }
+  ]
+}

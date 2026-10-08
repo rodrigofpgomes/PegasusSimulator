@@ -1,0 +1,10 @@
+{
+  "vehicle": "shuttle",
+  "vehicles": [
+    { "name": "pre_train_shuttle", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle/shuttle_pretrain/logs/26-07-16_10-46-50-388360_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "shuttle/shuttle_pretrain", "preset": "isaac_lab" },
+    { "name": "sac_lin_vel", "type": "sac_skrl", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle/v3_obs/logs/26-07-28_23-04-12-506927_SACDelayed_delay_2/checkpoints/best_agent.pt", "task": "shuttle/v3_obs", "preset": "isaac_lab" },
+    { "name": "ppo1000_lin_vel", "type": "ppo", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle/v3_obs/logs/ppo1000_lin_vel/checkpoints/best_agent.pt", "task": "shuttle/v3_obs", "preset": "test" },
+    { "name": "ppo1000_error_vel", "type": "ppo", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle/v3_obs/logs/ppo1000_error_vel/checkpoints/best_agent.pt", "task": "shuttle/v3_obs", "preset": "test" },
+    { "name": "ppo1000_error_vel_backward", "type": "ppo", "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/shuttle/v3_obs/logs/ppo1000_error_vel_backward/checkpoints/best_agent.pt", "task": "shuttle/v3_obs", "preset": "test" }
+  ]
+}

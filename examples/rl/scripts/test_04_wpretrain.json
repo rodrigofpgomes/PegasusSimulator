@@ -1,0 +1,12 @@
+{
+  "vehicle": "iris",
+  "vehicles": [
+    { "name": "raptor",   "type": "raptor",   "checkpoint": null },
+    { "name": "v1_skrl",      "type": "ppo",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/double_integrator/04_constant_death2/logs/skrl_shared/checkpoints/best_agent.pt", "task": "double_integrator/04_constant_death2", "preset": "isaac_lab" },
+    { "name": "v2_rslrl",      "type": "ppo2",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/double_integrator/04_constant_death2/logs/rslrl/checkpoints/best_agent.pt", "task": "double_integrator/04_constant_death2", "preset": "isaac_lab" },
+    { "name": "v3_wpre",      "type": "ppo2",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/double_integrator/04_constant_death2/logs/wpre/checkpoints/best_agent.pt", "task": "double_integrator/04_constant_death2", "preset": "isaac_lab" },
+    { "name": "v3_wpre_dv02",      "type": "ppo2",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/double_integrator/04_constant_death2/logs/wpre_dv02/checkpoints/best_agent.pt", "task": "double_integrator/04_constant_death2", "preset": "isaac_lab" },
+    { "name": "v3_wpre_lr5em4",      "type": "ppo2",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/double_integrator/04_constant_death2/logs/wpre_lr5em4/checkpoints/best_agent.pt", "task": "double_integrator/04_constant_death2", "preset": "isaac_lab" },
+    { "name": "v3_wpre_adp_lr",      "type": "ppo2",      "checkpoint": "/home/rodrigogomes/dev_skrl/examples/rl/tasks/double_integrator/04_constant_death2/logs/wpre_adp_lr/checkpoints/best_agent.pt", "task": "double_integrator/04_constant_death2", "preset": "isaac_lab" }
+  ]
+}

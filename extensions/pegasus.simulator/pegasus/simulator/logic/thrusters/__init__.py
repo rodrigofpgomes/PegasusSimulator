@@ -9,3 +9,5 @@ from .quadratic_thrust_curve import QuadraticThrustCurve
 from .quadratic_thrust_curve_batch import QuadraticThrustCurveBatch
 
 from .quadratic_thrust_curve_glider_batch import QuadraticThrustGliderCurveBatch
+
+from .glider_thrust_curve_batch import GliderThrustCurveBatch

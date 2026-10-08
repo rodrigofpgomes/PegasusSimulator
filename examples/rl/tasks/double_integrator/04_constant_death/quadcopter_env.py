@@ -161,10 +161,8 @@ class QuadcopterEnv(PegasusEnv):
         ep = self.reset_manager.goal_pos - pos
         ev = -quaternion_apply(quat, lin_vel_b)
 
-
         rw_ep = torch.sum(torch.square(ep), dim=1) 
         rw_ev = torch.sum(torch.square(ev), dim=1)
-
 
         cost = -self.cfg.position_error_reward_scale * rw_ep - self.cfg.lin_vel_error_reward_scale * rw_ev
 

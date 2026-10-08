@@ -1,14 +1,19 @@
 #!/usr/bin/env python
 """
 | File: play_multi.py
-| Description: Unified multi-vehicle evaluation (final play). Spawns any subset of
-|              controllers in a shared world for side-by-side comparison:
-|                - RAPTOR foundation policy on Iris (--raptor) and optionally Crazyflie (--crazyflie)
-|                - RAPTOR pre-training foundation policy on Iris (--pre_checkpoint)
-|                - SAC-trained policy on Iris (--sac_checkpoint)
-|              No RL training. Resets are driven by a fixed episode duration.
-|              Supports static goal and lemniscate (figure-8) trajectory tracking, and
-|              optional CSV recording consumed by dashboard_final.py.
+| Description: Unified multi-vehicle evaluation (final play). 
+|  
+| Spawns any subset of controllers in a shared world for side-by-side comparison:
+|   - RAPTOR foundation policy on Iris (--raptor) and optionally Crazyflie (--crazyflie)
+|   - RAPTOR pre-training foundation policy on Iris (--pre_checkpoint)
+|   - SAC-trained policy on Iris (--sac_checkpoint)
+|
+| Resets are driven by a fixed episode duration.
+| Supports static, lemniscate and fixed-wing-oriented trajectory tracking:
+|  - straight level flight, longitudinal climb/descent, level turns and helical turns. 
+| 
+| Optional CSV recording is consumed by dashboard_final.py.
+|
 | Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
 """
@@ -39,103 +44,208 @@ for p in [str(RL_DIR), str(PROJECT_ROOT), str(PEGASUS_EXT_DIR)]:
 
 
 # ---------------------------------------------------------------------
-# Lemniscate (figure-8) trajectory
+# Reference trajectories
 # ---------------------------------------------------------------------
 
-class LemniscateTrajectory:
-    """Bernoulli lemniscate (figure-8) reference trajectory in the XY plane.
+class TimedTrajectory:
+    """Base class for analytic references with per-environment clocks."""
 
-    Parametric form (Gerono lemniscate):
-        x(t) = cx + A * sin(w*t)
-        y(t) = cy + A * sin(w*t) * cos(w*t)  = cy + (A/2) * sin(2*w*t)
-        z(t) = z_ref   (constant altitude)
-
-    Velocity:
-        dx/dt = A*w * cos(w*t)
-        dy/dt =   A*w * cos(2*w*t)
-        dz/dt = 0
-
-    The per-env phase offset makes each environment track a different point
-    on the curve so that they don't all crash at the same moment.
-
-    Args:
-        n_envs:    Number of parallel environments.
-        amplitude: Half-width of the figure-8 [m].
-        period:    Time for one full loop [s].
-        z_ref:     Reference altitude [m].
-        center:    (N,3) tensor with the XY center for each env (from init_pos).
-        device:    Torch device.
-        phase_offset_per_env: If True spread env start phases uniformly over [0, 2π).
-    """
-
-    def __init__(
-        self,
-        n_envs: int,
-        amplitude: float,
-        period: float,
-        z_ref: float,
-        center: torch.Tensor,
-        device: str,
-        phase_offset_per_env: bool = True,
-    ):
-        self.n_envs = n_envs
-        self.A = float(amplitude)
-        self.w = 2.0 * math.pi / float(period)  # angular frequency [rad/s]
-        self.z_ref = float(z_ref)
+    def __init__(self, n_envs: int, center: torch.Tensor, device: str):
+        self.n_envs = int(n_envs)
         self.device = device
-
-        # Per-env XY center (N,3), kept on device
         self.center = center.to(device=device, dtype=torch.float32).clone()
-        self.center[:, 2] = self.z_ref  # override z
-
-        # Per-env time accumulator [s]
-        self._t = torch.zeros(n_envs, dtype=torch.float32, device=device)
-
-        if phase_offset_per_env and n_envs > 1:
-            # Spread phases uniformly so envs are not synchronized
-            phases = torch.linspace(0.0, 2.0 * math.pi, n_envs + 1, device=device)[:-1]
-            # Convert phase offset to equivalent time offset
-            self._t = phases / self.w
+        self._t = torch.zeros(self.n_envs, dtype=torch.float32, device=device)
 
     def reset(self, env_ids: torch.Tensor):
-        """Reset per-env timers for the given env IDs."""
         self._t[env_ids] = 0.0
 
     def step(self, dt: float) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Advance time by dt and return (pos, vel, acc) each (N, 3)."""
-        self._t += dt
+        self._t += float(dt)
         return self._eval(self._t)
 
     def at_time(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        """Evaluate at an explicit time tensor (N,)."""
-        return self._eval(t)
+        return self._eval(t.to(device=self.device, dtype=torch.float32))
+
+    @property
+    def current_time(self) -> torch.Tensor:
+        return self._t
+
+    def _altitude_profile(self, t: torch.Tensor, z_target: float, z_ramp_tau: float):
+        """Smooth second-order altitude ramp from spawn z to z_target.
+
+        The profile is a critically damped unit-step response:
+            h(t) = 1 - (1 + t/tau) exp(-t/tau)
+
+        Therefore z(0) equals the spawn altitude and vz(0)=0, avoiding both an
+        instantaneous vertical position error and a vertical-velocity step.
+        """
+        z0 = self.center[:, 2]
+        dz = float(z_target) - z0
+
+        if float(z_ramp_tau) <= 0.0:
+            z = torch.full_like(t, float(z_target))
+            vz = torch.zeros_like(t)
+            az = torch.zeros_like(t)
+            return z, vz, az
+
+        tau = float(z_ramp_tau)
+
+        u = t / tau
+        exp_term = torch.exp(-u)
+        h = 1.0 - (1.0 + u) * exp_term
+        h_dot = (t / (tau * tau)) * exp_term
+        h_ddot = ((1.0 / (tau * tau)) - (t / (tau * tau * tau))) * exp_term
+        z = z0 + dz * h
+        vz = dz * h_dot
+        az = dz * h_ddot
+        return z, vz, az
 
     def _eval(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        wt = self.w * t                             # (N,)
-        sin_wt  = torch.sin(wt)
+        raise NotImplementedError
+
+
+class LemniscateTrajectory(TimedTrajectory):
+    """Lemniscate in the horizontal plane (xy)."""
+
+    def __init__(self, n_envs: int, amplitude: float, period: float, z_ref: float,
+                 z_ramp_tau: float, center: torch.Tensor, device: str, phase_offset_per_env: bool = True):
+        super().__init__(n_envs, center, device)
+        self.A = float(amplitude)
+        self.w = 2.0 * math.pi / float(period)
+        self.z_ref = float(z_ref)
+        self.z_ramp_tau = max(float(z_ramp_tau), 1e-4)
+
+        self._phase_time_offset = torch.zeros(self.n_envs, dtype=torch.float32, device=device)
+        if phase_offset_per_env and self.n_envs > 1:
+            phases = torch.linspace(0.0, 2.0 * math.pi, self.n_envs + 1, device=device)[:-1]
+            self._phase_time_offset = phases / self.w
+
+    def _eval(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        wt = self.w * (t + self._phase_time_offset)
+        sin_wt = torch.sin(wt)
+        cos_wt = torch.cos(wt)
         sin_2wt = torch.sin(2.0 * wt)
-        cos_wt  = torch.cos(wt)
         cos_2wt = torch.cos(2.0 * wt)
 
         pos = self.center.clone()
         pos[:, 0] += self.A * sin_wt
-        pos[:, 1] += 0.5 * self.A * torch.sin(2.0 * wt)
-        # z already set to z_ref in center
+        pos[:, 1] += 0.5 * self.A * sin_2wt
 
         vel = torch.zeros(self.n_envs, 3, dtype=torch.float32, device=self.device)
         vel[:, 0] = self.A * self.w * cos_wt
         vel[:, 1] = self.A * self.w * cos_2wt
 
-        acc = torch.zeros(self.n_envs, 3, dtype=torch.float32, device=self.device)
+        acc = torch.zeros_like(vel)
         acc[:, 0] = -self.A * self.w**2 * sin_wt
         acc[:, 1] = -2.0 * self.A * self.w**2 * sin_2wt
-        # vz = 0
 
+        pos[:, 2], vel[:, 2], acc[:, 2] = self._altitude_profile(t, self.z_ref, self.z_ramp_tau)
         return pos, vel, acc
 
-    @property
-    def current_time(self) -> torch.Tensor:
-        return self._t
+
+class ForwardFlightTrajectory(TimedTrajectory):
+    """Straight level flight with a smooth exponential speed ramp."""
+
+    def __init__(self, n_envs: int, speed: float, z_ref: float, ramp_tau: float,
+                 z_ramp_tau: float, center: torch.Tensor, device: str):
+        super().__init__(n_envs, center, device)
+        self.speed = float(speed)
+        self.z_ref = float(z_ref)
+        self.ramp_tau = max(float(ramp_tau), 1e-4)
+        self.z_ramp_tau = max(float(z_ramp_tau), 1e-4)
+
+    def _forward_profile(self, t: torch.Tensor):
+        exp_term = torch.exp(-t / self.ramp_tau)
+        v = self.speed * (1.0 - exp_term)
+        s = self.speed * (t - self.ramp_tau * (1.0 - exp_term))
+        a = (self.speed / self.ramp_tau) * exp_term
+        return s, v, a
+
+    def _eval(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        s, v, a = self._forward_profile(t)
+        pos = self.center.clone()
+        pos[:, 0] += s
+
+        vel = torch.zeros(self.n_envs, 3, dtype=torch.float32, device=self.device)
+        vel[:, 0] = v
+
+        acc = torch.zeros_like(vel)
+        acc[:, 0] = a
+
+        pos[:, 2], vel[:, 2], acc[:, 2] = self._altitude_profile(t, self.z_ref, self.z_ramp_tau)
+        return pos, vel, acc
+
+
+class LongitudinalFlightTrajectory(ForwardFlightTrajectory):
+    """Forward flight with periodic climb/descent in the x-z plane."""
+
+    def __init__(self, n_envs: int, speed: float, z_ref: float, z_amplitude: float,
+                 z_period: float, ramp_tau: float, z_ramp_tau: float, center: torch.Tensor, device: str):
+        super().__init__(n_envs, speed, z_ref, ramp_tau, z_ramp_tau, center, device)
+        self.z_amplitude = float(z_amplitude)
+        self.z_w = 2.0 * math.pi / float(z_period)
+
+    def _eval(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        pos, vel, acc = super()._eval(t)
+        wt = self.z_w * t
+        pos[:, 2] += 0.5 * self.z_amplitude * (1.0 - torch.cos(wt))
+        vel[:, 2] += 0.5 * self.z_amplitude * self.z_w * torch.sin(wt)
+        acc[:, 2] += 0.5 * self.z_amplitude * self.z_w**2 * torch.cos(wt)
+        return pos, vel, acc
+
+
+class LevelTurnTrajectory(ForwardFlightTrajectory):
+    """Constant-radius horizontal turn with a smooth entry from rest."""
+
+    def __init__(self, n_envs: int, speed: float, radius: float, z_ref: float,
+                 ramp_tau: float, z_ramp_tau: float, center: torch.Tensor, device: str, direction: float = 1.0):
+        super().__init__(n_envs, speed, z_ref, ramp_tau, z_ramp_tau, center, device)
+        self.radius = max(abs(float(radius)), 1e-3)
+        self.direction = 1.0 if float(direction) >= 0.0 else -1.0
+
+    def _eval(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        s, v, a_t = self._forward_profile(t)
+        theta = s / self.radius
+        sin_th = torch.sin(theta)
+        cos_th = torch.cos(theta)
+
+        pos = self.center.clone()
+        pos[:, 0] += self.radius * sin_th
+        pos[:, 1] += self.direction * self.radius * (1.0 - cos_th)
+
+        vel = torch.zeros(self.n_envs, 3, dtype=torch.float32, device=self.device)
+        vel[:, 0] = v * cos_th
+        vel[:, 1] = self.direction * v * sin_th
+
+        centripetal = v.square() / self.radius
+        acc = torch.zeros_like(vel)
+        acc[:, 0] = a_t * cos_th - centripetal * sin_th
+        acc[:, 1] = self.direction * (a_t * sin_th + centripetal * cos_th)
+
+        pos[:, 2], vel[:, 2], acc[:, 2] = self._altitude_profile(t, self.z_ref, self.z_ramp_tau)
+        return pos, vel, acc
+
+
+class HelicalTurnTrajectory(LevelTurnTrajectory):
+    """Constant-radius turn plus a smooth constant climb/descent rate."""
+
+    def __init__(self, n_envs: int, speed: float, radius: float, z_ref: float,
+                 climb_rate: float, ramp_tau: float, z_ramp_tau: float, center: torch.Tensor,
+                 device: str, direction: float = 1.0):
+        super().__init__(n_envs, speed, radius, z_ref, ramp_tau, z_ramp_tau, center, device, direction)
+        self.climb_rate = float(climb_rate)
+
+    def _eval(self, t: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        pos, vel, acc = super()._eval(t)
+        exp_term = torch.exp(-t / self.ramp_tau)
+        vz = self.climb_rate * (1.0 - exp_term)
+        dz = self.climb_rate * (t - self.ramp_tau * (1.0 - exp_term))
+        az = (self.climb_rate / self.ramp_tau) * exp_term
+
+        pos[:, 2] += dz
+        vel[:, 2] += vz
+        acc[:, 2] += az
+        return pos, vel, acc
 
 
 # ---------------------------------------------------------------------
@@ -182,10 +292,6 @@ def _to_np_ref(value, n_envs: int):
 def _desired_attitude_from_accel(a_des, yaw = 0) -> np.ndarray:
     """Build the desired rotation matrix R_d from a desired acceleration.
 
-    Geometric / differential-flatness construction with the yaw fixed to 0,
-    identical to the convention used in non_linear_controller.py and
-    lqr_controller_batch.py:
-
         z_b_des = a_des / ||a_des||
         x_c_des = [cos(yaw), sin(yaw), 0] = [1, 0, 0]
         y_b_des = (z_b_des x x_c_des) / ||.||
@@ -227,6 +333,7 @@ def _desired_attitude_from_accel(a_des, yaw = 0) -> np.ndarray:
     R[:, :, 0] = x_b
     R[:, :, 1] = y_b
     R[:, :, 2] = z_b
+    
     return R
 
 
@@ -262,7 +369,8 @@ class EpisodeTrajectoryRecorder:
         self.trajectory = trajectory
         
         self.vehicle_type = vehicle_type
-        self.is_shuttle_glider = vehicle_type == "shuttle_glider"
+        self.is_shuttle_glider = vehicle_type == "shuttle_glider" or vehicle_type == "shuttle_glider2"
+        self.is_shuttle_glider2 = vehicle_type == "shuttle_glider2"
 
         self.n_rotors = int(n_rotors)
 
@@ -289,8 +397,7 @@ class EpisodeTrajectoryRecorder:
         self.ep_file = open(self.out_dir / "episodes.csv", "w", newline="")
 
         rotor_cols = []
-        for group in ("cmd_w", "cmd_rpm", "actual_w", "actual_rpm",
-                    "l2f_action", "l2f_cmd_rpm", "l2f_current_rpm"):
+        for group in ("cmd_w", "actual_w"):
             rotor_cols += [f"{group}_{i}" for i in range(self.n_rotors)]
             
         trajectory_fields = [
@@ -305,6 +412,7 @@ class EpisodeTrajectoryRecorder:
             "speed",
             "goal_x", "goal_y", "goal_z",
             "ref_vx", "ref_vy", "ref_vz",
+            "ref_ax", "ref_ay", "ref_az",
             "pos_error",
             "z_error",
             "att_err_ff",
@@ -317,6 +425,7 @@ class EpisodeTrajectoryRecorder:
         ]
         
         self.glider_metric_cols = []
+        self.surface_metric_cols = []
 
         if self.is_shuttle_glider:
             self.glider_metric_cols = [
@@ -326,6 +435,9 @@ class EpisodeTrajectoryRecorder:
                 "heading_error_abs_deg",
                 "heading_alignment",
                 "heading_valid",
+                "roll_deg",
+                "pitch_deg",
+                "yaw_deg",
                 "tilt_angle_deg",
                 "v_forward_body",
                 "v_lateral_body",
@@ -335,9 +447,25 @@ class EpisodeTrajectoryRecorder:
                 "thrust_5_useful",
                 "v_induced_5_est",
                 "delta_v_slipstream_est",
+                "aero_fx_body",
+                "aero_fy_body",
+                "aero_fz_body",
+                "aero_force_norm",
+                "aero_tx_body",
+                "aero_ty_body",
+                "aero_tz_body",
+                "aero_torque_norm",
             ]
             
             trajectory_fields += self.glider_metric_cols
+
+        if self.is_shuttle_glider2:
+            self.surface_metric_cols = [
+                "elevator_deg",
+                "aileron_deg",
+                "rudder_deg",
+            ]
+            trajectory_fields += self.surface_metric_cols
 
         self.traj_writer = csv.DictWriter(
             self.traj_file,
@@ -430,29 +558,76 @@ class EpisodeTrajectoryRecorder:
 
         return cmd_w_np, actual_w_np
 
-    def _get_l2f_debug_numpy(self, vehicle):
-        nan = np.full((self.n_envs, self.n_rotors), np.nan, dtype=np.float32)
-        backend = self._get_first_backend(vehicle)
+    def _get_control_surfaces_numpy(self, vehicle):
+        """Return [elevator, aileron, rudder] deflections in degrees.
 
-        def read_attr(name):
-            if backend is None or not hasattr(backend, name):
-                return nan.copy()
-            value = getattr(backend, name)
+        shuttle_glider2 stores the physical surface deflections in the task env's
+        ``_control_surfaces`` buffer in radians. Neutral / unavailable surfaces are
+        reported as exactly 0 deg so the dashboard has a clear zero baseline.
+        """
+        zeros = np.zeros((self.n_envs, 3), dtype=np.float32)
+
+        if not self.is_shuttle_glider2:
+            return zeros
+
+        backend = self._get_first_backend(vehicle)
+        env = getattr(backend, "_env", None) if backend is not None else None
+        surfaces = getattr(env, "_control_surfaces", None)
+
+        # Preferred path for the shuttle_glider2 RL task: the env keeps the
+        # already-scaled physical deflections in radians.
+        if surfaces is not None:
+            if isinstance(surfaces, torch.Tensor):
+                arr = surfaces.detach().cpu().numpy()
+            else:
+                arr = np.asarray(surfaces, dtype=np.float32)
+
+            if arr.ndim == 2 and arr.shape[0] >= self.n_envs and arr.shape[1] >= 3:
+                return np.rad2deg(arr[:self.n_envs, :3]).astype(np.float32, copy=False)
+
+        # Fallback for another backend using the same shuttle_glider2 actuator
+        # interface [w0,w1,w2,w3,wp,de,da,dr]. Entries 5:8 are also physical
+        # surface deflections in radians.
+        command = backend.input_reference() if backend is not None else None
+        if command is not None:
+            if isinstance(command, torch.Tensor):
+                arr = command.detach().cpu().numpy()
+            else:
+                arr = np.asarray(command, dtype=np.float32)
+
+            if arr.ndim == 2 and arr.shape[0] >= self.n_envs and arr.shape[1] >= 8:
+                return np.rad2deg(arr[:self.n_envs, 5:8]).astype(np.float32, copy=False)
+
+        return zeros
+
+    def _get_aero_wrench_numpy(self, vehicle):
+        """Return aerodynamic force and moment about the merged-body CoM in body FLU axes.
+
+        For non-glider vehicles, or if the aerodynamic model is unavailable, NaNs are returned.
+        """
+        nan = np.full((self.n_envs, 3), np.nan, dtype=np.float32)
+
+        aero = getattr(vehicle, "aerodynamics", None)
+        if aero is None:
+            aero = getattr(vehicle, "_aerodynamics", None)
+        if aero is None:
+            return nan.copy(), nan.copy()
+
+        force = getattr(aero, "force", None)
+        torque = getattr(aero, "torque", None)
+
+        def _to_np3(value):
             if value is None:
                 return nan.copy()
             if isinstance(value, torch.Tensor):
                 arr = value.detach().cpu().numpy()
             else:
                 arr = np.asarray(value, dtype=np.float32)
-            if arr.ndim != 2 or arr.shape[1] < self.n_rotors:
+            if arr.ndim != 2 or arr.shape[0] < self.n_envs or arr.shape[1] < 3:
                 return nan.copy()
-            return arr[:self.n_envs, :self.n_rotors]
+            return arr[:self.n_envs, :3].astype(np.float32, copy=False)
 
-        return (
-            read_attr("last_action_norm_l2f"),
-            read_attr("last_rpm_cmd_l2f"),
-            read_attr("last_current_rpm_l2f"),
-        )
+        return _to_np3(force), _to_np3(torque)
 
     def _get_ref_vel_numpy(self):
         """Returns reference velocity (N,3) from trajectory, or zeros for static goal."""
@@ -515,6 +690,11 @@ class EpisodeTrajectoryRecorder:
 
         # R maps vectors from body to world.
         R = quaternion_to_matrix(state.attitude).detach().cpu().numpy().astype(np.float64)
+
+        # ZYX Euler angles: R = Rz(yaw) Ry(pitch) Rx(roll).
+        pitch = np.arcsin(np.clip(-R[:, 2, 0], -1.0, 1.0))
+        roll = np.arctan2(R[:, 2, 1], R[:, 2, 2])
+        yaw = np.arctan2(R[:, 1, 0], R[:, 0, 0])
 
         pos_w = state.position.detach().cpu().numpy().astype(np.float64)
 
@@ -582,7 +762,7 @@ class EpisodeTrajectoryRecorder:
         beta_kinematic = np.where(body_speed_xy > 0.05, beta_kinematic, np.nan)
 
         # Rotor 5 thrust estimate (N) from actual rotor speed (rad/s) using the same kf
-        kf_5 = 8.54858e-6
+        kf_5 = 8.5e-6
         omega_5 = actual_w[:, 4].astype(np.float64)
 
         thrust_5 = kf_5 * omega_5**2
@@ -617,6 +797,9 @@ class EpisodeTrajectoryRecorder:
             ),
             "heading_alignment": heading_alignment,
             "heading_valid": heading_valid.astype(np.float64),
+            "roll_deg": np.rad2deg(roll),
+            "pitch_deg": np.rad2deg(pitch),
+            "yaw_deg": np.rad2deg(yaw),
             "tilt_angle_deg": np.rad2deg(tilt_angle),
             "v_forward_body": v_forward_body,
             "v_lateral_body": v_lateral_body,
@@ -649,23 +832,30 @@ class EpisodeTrajectoryRecorder:
 
             body_force, body_torque = self._get_body_force_torque_numpy(vehicle)
             cmd_w, actual_w = self._get_rotor_input_numpy(vehicle)
-            
+            control_surfaces_deg = self._get_control_surfaces_numpy(vehicle)
+
             glider_metrics = None
 
             if self.is_shuttle_glider:
-                glider_metrics = (
-                    self._compute_shuttle_glider_metrics(
-                        state=state,
-                        goals=goals,
-                        ref_vel=ref_vel,
-                        actual_w=actual_w,
-                    )
+                aero_force, aero_torque = self._get_aero_wrench_numpy(vehicle)
+                glider_metrics = self._compute_shuttle_glider_metrics(
+                    state=state,
+                    goals=goals,
+                    ref_vel=ref_vel,
+                    actual_w=actual_w,
                 )
+                glider_metrics.update({
+                    "aero_fx_body": aero_force[:, 0],
+                    "aero_fy_body": aero_force[:, 1],
+                    "aero_fz_body": aero_force[:, 2],
+                    "aero_force_norm": np.linalg.norm(aero_force, axis=1),
+                    "aero_tx_body": aero_torque[:, 0],
+                    "aero_ty_body": aero_torque[:, 1],
+                    "aero_tz_body": aero_torque[:, 2],
+                    "aero_torque_norm": np.linalg.norm(aero_torque, axis=1),
+                })
                 
-            l2f_action, l2f_cmd_rpm, l2f_current_rpm = self._get_l2f_debug_numpy(vehicle)
 
-            cmd_rpm = cmd_w * 60.0 / (2.0 * np.pi)
-            actual_rpm = actual_w * 60.0 / (2.0 * np.pi)
 
             pos_error = np.linalg.norm(pos - goals, axis=1)
             z_error = goals[:, 2] - pos[:, 2]
@@ -699,6 +889,9 @@ class EpisodeTrajectoryRecorder:
                     "ref_vx": float(ref_vel[env_id, 0]),
                     "ref_vy": float(ref_vel[env_id, 1]),
                     "ref_vz": float(ref_vel[env_id, 2]),
+                    "ref_ax": float(ref_acc[env_id, 0]),
+                    "ref_ay": float(ref_acc[env_id, 1]),
+                    "ref_az": float(ref_acc[env_id, 2]),
                     "pos_error": float(pos_error[env_id]),
                     "z_error": float(z_error[env_id]),
 
@@ -718,18 +911,18 @@ class EpisodeTrajectoryRecorder:
 
                 for i in range(self.n_rotors):
                     row[f"cmd_w_{i}"]          = float(cmd_w[env_id, i])
-                    row[f"cmd_rpm_{i}"]        = float(cmd_rpm[env_id, i])
                     row[f"actual_w_{i}"]       = float(actual_w[env_id, i])
-                    row[f"actual_rpm_{i}"]     = float(actual_rpm[env_id, i])
-                    row[f"l2f_action_{i}"]     = float(l2f_action[env_id, i])
-                    row[f"l2f_cmd_rpm_{i}"]    = float(l2f_cmd_rpm[env_id, i])
-                    row[f"l2f_current_rpm_{i}"]= float(l2f_current_rpm[env_id, i])
                     
                 if self.is_shuttle_glider:
                     for key in self.glider_metric_cols:
                         row[key] = float(
                             glider_metrics[key][env_id]
                         )
+
+                if self.is_shuttle_glider2:
+                    row["elevator_deg"] = float(control_surfaces_deg[env_id, 0])
+                    row["aileron_deg"] = float(control_surfaces_deg[env_id, 1])
+                    row["rudder_deg"] = float(control_surfaces_deg[env_id, 2])
 
                 self.traj_writer.writerow(row)
 
@@ -738,11 +931,15 @@ class EpisodeTrajectoryRecorder:
                     self.tb.add_scalar(f"{prefix}/z", row["z"], self.global_step)
                     self.tb.add_scalar(f"{prefix}/speed", row["speed"], self.global_step)
                     self.tb.add_scalar(f"{prefix}/pos_error", row["pos_error"], self.global_step)
-                    self.tb.add_scalar(f"{prefix}/cmd_rpm_0", row["cmd_rpm_0"], self.global_step)
-                    self.tb.add_scalar(f"{prefix}/actual_rpm_0", row["actual_rpm_0"], self.global_step)
+                    self.tb.add_scalar(f"{prefix}/cmd_w_0", row["cmd_w_0"], self.global_step)
+                    self.tb.add_scalar(f"{prefix}/actual_w_0", row["actual_w_0"], self.global_step)
                     self.tb.add_scalar(f"{prefix}/fx_body", row["fx_body"], self.global_step)
                     self.tb.add_scalar(f"{prefix}/fy_body", row["fy_body"], self.global_step)
                     self.tb.add_scalar(f"{prefix}/fz_body", row["fz_body"], self.global_step)
+                    if self.is_shuttle_glider2:
+                        self.tb.add_scalar(f"{prefix}/elevator_deg", row["elevator_deg"], self.global_step)
+                        self.tb.add_scalar(f"{prefix}/aileron_deg", row["aileron_deg"], self.global_step)
+                        self.tb.add_scalar(f"{prefix}/rudder_deg", row["rudder_deg"], self.global_step)
 
     def advance(self, terminated, truncated):
         self.global_step += 1
@@ -809,7 +1006,7 @@ def parse_args():
 
     # ---- Global vehicle model. ALL instantiated controllers use this same
     #      airframe (any per-entry vehicle/cfg in the manifest is ignored). ----
-    p.add_argument("--vehicle", choices=["iris", "crazyflie", "shuttle", "shuttle_glider"], default="iris",
+    p.add_argument("--vehicle", choices=["iris", "crazyflie", "shuttle", "shuttle_glider", "shuttle_glider2"], default="iris",
                    help="Vehicle model used for ALL instantiated controllers.")
 
     # ---- Manifest-driven controllers (preferred). A JSON file describing the
@@ -831,14 +1028,19 @@ def parse_args():
                    metavar=("LOW", "HIGH"), help="Z goal randomization range [m].")
 
     # Trajectory tracking
-    p.add_argument("--trajectory", choices=["none", "lemniscate"], default="none",
-                   help="Reference trajectory type. 'none' = static goal.")
-    p.add_argument("--traj_amplitude", type=float, default=1.5,
-                   help="Lemniscate half-width [m] (default 1.5 m, as in RAPTOR paper).")
-    p.add_argument("--traj_period", type=float, default=8.0,
-                   help="Time for one full lemniscate loop [s] (default 8 s).")
-    p.add_argument("--traj_z", type=float, default=1.5,
-                   help="Reference altitude for trajectory [m] (default 1.5 m).")
+    p.add_argument("--trajectory", choices=["none", "lemniscate", "straight", "longitudinal", "turn", "helix"], default="none",
+                   help="Reference: static goal, figure-8, straight flight, x-z climb/descent, level turn or helical turn.")
+    p.add_argument("--traj_amplitude", type=float, default=1.5, help="Lemniscate half-width [m].")
+    p.add_argument("--traj_period", type=float, default=8.0, help="Lemniscate period [s].")
+    p.add_argument("--traj_z", type=float, default=1.5, help="Reference/base altitude [m].")
+    p.add_argument("--traj_speed", type=float, default=1.5, help="Forward reference speed [m/s].")
+    p.add_argument("--traj_radius", type=float, default=10.0, help="Turn radius for turn/helix [m].")
+    p.add_argument("--traj_z_amplitude", type=float, default=0.30, help="Vertical excursion amplitude parameter for longitudinal trajectory [m].")
+    p.add_argument("--traj_z_period", type=float, default=8.0, help="Vertical oscillation period for longitudinal trajectory [s].")
+    p.add_argument("--traj_climb_rate", type=float, default=0.15, help="Asymptotic vertical climb rate for helix [m/s].")
+    p.add_argument("--traj_ramp_tau", type=float, default=0.75, help="Speed/climb exponential ramp time constant [s].")
+    p.add_argument("--traj_z_ramp_tau", type=float, default=2.5, help="Smooth altitude-ramp time constant from spawn z to traj_z [s].")
+    p.add_argument("--traj_turn_direction", choices=["left", "right"], default="left", help="Turn direction for turn/helix.")
 
     p.add_argument("--sac_checkpoint", type=str, default=None,
                    help="Path to a skrl SAC checkpoint (.pt) to evaluate. If set, adds a SAC-controlled Iris vehicle.")
@@ -871,6 +1073,8 @@ from pxr import PhysxSchema
 
 from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
 from pegasus.simulator.logic.vehicles.multirotor_batch import MultirotorBatch, MultirotorBatchConfig
+from pegasus.simulator.logic.vehicles.shuttle_glider_batch import ShuttleGliderBatch, ShuttleGliderBatchConfig
+from pegasus.simulator.logic.vehicles.shuttle_glider_batch2 import ShuttleGliderBatch2, ShuttleGliderBatchConfig2
 from pegasus.simulator.logic.transforms import quaternion_to_matrix
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.rl import ResetManager, GoalCfg
@@ -1027,6 +1231,32 @@ def make_shuttle_glider_cfg():
     "rotor_axes_body":            [[0, 0, 1], [0, 0, 1], [0, 0, 1], [0, 0, 1], [1, 0, 0]]
 }
 
+def make_shuttle_glider_cfg2():
+    # Shuttle real parameters (from PX4/Gazebo shuttle.sdf):
+    return {
+        "shuttle_thrust_cfg": {
+            "num_rotors": 4,
+            "rotor_constant": [1.709716e-05, 1.709716e-05, 1.709716e-05, 1.709716e-05],
+            "rolling_moment_coefficient": [1e-06, 1e-06, 1e-06, 1e-06],
+            "rot_dir": [-1, -1, 1, 1],
+            "min_rotor_velocity": [0, 0, 0, 0],
+            "max_rotor_velocity": [1400, 1400, 1400, 1400],
+            "motor_time_constant": [0.008, 0.008, 0.008, 0.008]
+        },
+
+        "glider_thrust_cfg": {
+            "thrust_constant": 8.5e-6,
+            "moment_constant": 0.018,
+            "reaction_moment_sign": -1.0,
+            "min_rotor_velocity": 0.0,
+            "max_rotor_velocity": 3500.0,
+            "motor_time_constant": 0.0,
+        },
+
+        "aerodynamics_cfg": {
+            # EasyGlider geometry + coefficients
+        },
+    }
 
 # ---------------------------------------------------------------------
 # Controller registry (manifest-driven instantiation)
@@ -1038,15 +1268,17 @@ VEHICLE_CFGS = {
     "crazyflie": make_crazyflie_cfg,
     "shuttle": make_shuttle_cfg,
     "shuttle_glider": make_shuttle_glider_cfg,
+    "shuttle_glider2": make_shuttle_glider_cfg2,
 }
 
 # Physical-vehicle key -> USD asset key in ROBOTS. The same model is used for
 # every controller so that all instantiated vehicles are identical.
 VEHICLE_USD = {
     "iris": "Iris",
-    "crazyflie": "Crazyflie_L2F",
+    "crazyflie": "Crazyflie",
     "shuttle": "Shuttle",
     "shuttle_glider": "Shuttle_glider",
+    "shuttle_glider2": "Shuttle_glider2",
 }
 
 
@@ -1129,8 +1361,8 @@ def _make_skrl_builder(algo):
             task=entry["task"],
             algo=algo,
             preset=entry.get("preset", "isaac_lab"),
-            obs_dim=entry.get("obs_dim", 26),
-            act_dim=entry.get("act_dim", 4),
+            obs_dim=entry.get("obs_dim"),
+            act_dim=entry.get("act_dim"),
             n_vehicles=n_envs,
             reset_manager=None,
             action_mode=entry.get("action_mode", "rotor_velocity_direct"),
@@ -1151,6 +1383,7 @@ CONTROLLER_REGISTRY = {
     "pretrain":  _build_pretrain_backend,
     "sac":       _build_sac_backend,
     "ppo":       _make_skrl_builder("ppo"),
+    "ppo2":       _make_skrl_builder("ppo2"),
     "sac_skrl":  _make_skrl_builder("sac"),
     "nonlinear": _build_nonlinear_backend,
 }
@@ -1234,7 +1467,7 @@ def main():
     pg._world = World(**dict(pg._world_settings))
     world = pg.world
 
-    pg.load_environment(SIMULATION_ENVIRONMENTS["Curved Gridroom"])
+    pg.load_environment(SIMULATION_ENVIRONMENTS["Flat Plane"])
 
     prim_utils.create_prim(
         "/World/Light/DomeLight",
@@ -1263,30 +1496,49 @@ def main():
 
     def _spawn(name, usd_key, backend, cfg_fn):
         """Instantiate one controller's vehicle batch and register it."""
-        cfg = MultirotorBatchConfig(cfg=cfg_fn(), n_vehicles=n_envs)
-        cfg.backends = [backend]
+
+        physics_cfg = cfg_fn()
+
+        if vehicle_choice == "shuttle_glider":
+            vehicle_cfg = ShuttleGliderBatchConfig(cfg=physics_cfg, n_vehicles=n_envs)
+            VehicleClass = ShuttleGliderBatch
+
+        elif vehicle_choice == "shuttle_glider2":
+            vehicle_cfg = ShuttleGliderBatchConfig2(cfg=physics_cfg, n_vehicles=n_envs)
+            VehicleClass = ShuttleGliderBatch2
+
+        else:
+            vehicle_cfg = MultirotorBatchConfig(cfg=physics_cfg, n_vehicles=n_envs)
+            VehicleClass = MultirotorBatch
+
+        vehicle_cfg.backends = [backend]
+
         kwargs = dict(
             stage_prefix=f"/World/{name}",
             usd_file=ROBOTS[usd_key],
             vehicle_batch_id=_next_id["value"],
             n_vehicles=n_envs,
-            config=cfg,
+            config=vehicle_cfg,
         )
+
         if _anchor["vehicle"] is None:
             kwargs["spacing"] = 2.5
         else:
             kwargs["init_pos"] = _anchor["vehicle"]._init_pos
             kwargs["init_orientation"] = _anchor["vehicle"]._init_orientation
-        vehicle = MultirotorBatch(**kwargs)
-        # Disable collisions for this vehicle batch: the controllers are spawned
-        # overlapping in space for comparison, so PhysX contacts between them (or
-        # with the ground) must not perturb the recorded trajectories.
-        vehicle.disable_collisions()
+
+        vehicle = VehicleClass(**kwargs)
+
+        if hasattr(vehicle, "disable_collisions"):
+            vehicle.disable_collisions()
+
         if _anchor["vehicle"] is None:
             _anchor["vehicle"] = vehicle
+
         _next_id["value"] += 1
         controllers[name] = vehicle
         backends_order.append(backend)
+
         return vehicle
 
     if manifest_vehicles is not None:
@@ -1377,27 +1629,39 @@ def main():
     marker_backend = next((b for b in backends_order if hasattr(b, "create_goal_marker")), None)
 
     # -----------------------------------------------------------------
-    # Trajectory (lemniscate or static goal)
+    # Reference trajectory
     # -----------------------------------------------------------------
     trajectory = None
-    use_lemniscate = (args.trajectory == "lemniscate")
+    center = _anchor["vehicle"]._init_pos.clone().to(device=device, dtype=torch.float32)
+    direction = 1.0 if args.traj_turn_direction == "left" else -1.0
 
-    if use_lemniscate:
-        # Center each env on its spawn position; override Z to traj_z.
-        center = _anchor["vehicle"]._init_pos.clone().to(device=device, dtype=torch.float32)
-        trajectory = LemniscateTrajectory(
-            n_envs=n_envs,
-            amplitude=args.traj_amplitude,
-            period=args.traj_period,
-            z_ref=args.traj_z,
-            center=center,
-            device=device,
-        )
-        print(
-            f"[Sim] Lemniscate trajectory: A={args.traj_amplitude} m, "
-            f"T={args.traj_period} s, z={args.traj_z} m",
-            flush=True,
-        )
+    if args.trajectory == "lemniscate":
+        trajectory = LemniscateTrajectory(n_envs=n_envs, amplitude=args.traj_amplitude, period=args.traj_period,
+                                          z_ref=args.traj_z, z_ramp_tau=args.traj_z_ramp_tau, center=center, device=device)
+        print(f"[Sim] Lemniscate: A={args.traj_amplitude:.2f} m, T={args.traj_period:.2f} s, z={args.traj_z:.2f} m", flush=True)
+    elif args.trajectory == "straight":
+        trajectory = ForwardFlightTrajectory(n_envs=n_envs, speed=args.traj_speed, z_ref=args.traj_z,
+                                             ramp_tau=args.traj_ramp_tau, z_ramp_tau=args.traj_z_ramp_tau, center=center, device=device)
+        print(f"[Sim] Straight flight: V={args.traj_speed:.2f} m/s, z={args.traj_z:.2f} m, tau_xy={args.traj_ramp_tau:.2f} s, tau_z={args.traj_z_ramp_tau:.2f} s", flush=True)
+    elif args.trajectory == "longitudinal":
+        trajectory = LongitudinalFlightTrajectory(n_envs=n_envs, speed=args.traj_speed, z_ref=args.traj_z,
+                                                  z_amplitude=args.traj_z_amplitude, z_period=args.traj_z_period,
+                                                  ramp_tau=args.traj_ramp_tau, z_ramp_tau=args.traj_z_ramp_tau, center=center, device=device)
+        print(f"[Sim] Longitudinal x-z: V={args.traj_speed:.2f} m/s, Az={args.traj_z_amplitude:.2f} m, "
+              f"Tz={args.traj_z_period:.2f} s, z_target={args.traj_z:.2f} m, tau_z={args.traj_z_ramp_tau:.2f} s", flush=True)
+    elif args.trajectory == "turn":
+        trajectory = LevelTurnTrajectory(n_envs=n_envs, speed=args.traj_speed, radius=args.traj_radius,
+                                         z_ref=args.traj_z, ramp_tau=args.traj_ramp_tau, z_ramp_tau=args.traj_z_ramp_tau,
+                                         center=center, device=device, direction=direction)
+        print(f"[Sim] Level turn: V={args.traj_speed:.2f} m/s, R={args.traj_radius:.2f} m, "
+              f"direction={args.traj_turn_direction}, z_target={args.traj_z:.2f} m, tau_z={args.traj_z_ramp_tau:.2f} s", flush=True)
+    elif args.trajectory == "helix":
+        trajectory = HelicalTurnTrajectory(n_envs=n_envs, speed=args.traj_speed, radius=args.traj_radius,
+                                           z_ref=args.traj_z, climb_rate=args.traj_climb_rate,
+                                           ramp_tau=args.traj_ramp_tau, z_ramp_tau=args.traj_z_ramp_tau, center=center, device=device,
+                                           direction=direction)
+        print(f"[Sim] Helical turn: V={args.traj_speed:.2f} m/s, R={args.traj_radius:.2f} m, "
+              f"Vz={args.traj_climb_rate:.2f} m/s, direction={args.traj_turn_direction}", flush=True)
     else:
         print("[Sim] Static goal mode.", flush=True)
 
@@ -1412,36 +1676,27 @@ def main():
         reset_manager._goal_vel[:] = vel
         reset_manager._goal_acc[:] = acc
 
-    def _draw_lemniscate_viewport(traj_obj):
-        """Draw the lemniscate curve(s) in the Isaac Sim viewport using debug lines.
-        Called once after world.reset(); headless mode skips this silently.
-        Color matches the matplotlib/Plotly default blue used in the paper plots.
-        """
+    def _draw_trajectory_viewport(traj_obj):
+        """Draw env-0 reference path over one episode in the Isaac Sim viewport."""
         if traj_obj is None or args.headless:
             return
 
         from isaacsim.util.debug_draw import _debug_draw
         draw = _debug_draw.acquire_debug_draw_interface()
-
-        # Matplotlib default blue: #1f77b4  -> (31, 119, 180)
         color = (31 / 255, 119 / 255, 180 / 255, 1.0)
-        # Parametrise directly over phase angle: wt ∈ [0, 2π] closes the curve
-        # regardless of the chosen period T.
-        n_samples = 200
-        wt = torch.linspace(0.0, 2.0 * math.pi, n_samples + 1, device=device)  # +1 so last == first
 
-        # Use env 0 centre
-        cx = float(traj_obj.center[0, 0])
-        cy = float(traj_obj.center[0, 1])
-        cz = float(traj_obj.z_ref)
-
-        xs = cx + traj_obj.A * torch.sin(wt)
-        ys = cy + 0.5 * traj_obj.A * torch.sin(2.0 * wt)
-        pts = [(float(xs[i]), float(ys[i]), cz) for i in range(n_samples + 1)]
+        n_samples = 300
+        duration = float(args.episode_duration)
+        points = []
+        for t_sample in torch.linspace(0.0, duration, n_samples, device=device):
+            t_vec = torch.full((n_envs,), float(t_sample), dtype=torch.float32, device=device)
+            pos, _, _ = traj_obj.at_time(t_vec)
+            p0 = pos[0]
+            points.append((float(p0[0]), float(p0[1]), float(p0[2])))
 
         draw.clear_lines()
-        draw.draw_lines_spline(pts, color, 5, False)
-        print("[draw] Lemniscate drawn in viewport.", flush=True)
+        draw.draw_lines_spline(points, color, 5, False)
+        print(f"[draw] {args.trajectory} reference drawn in viewport.", flush=True)
 
     # -----------------------------------------------------------------
     # Recorder
@@ -1451,7 +1706,8 @@ def main():
     if args.record:
         record_vehicles = dict(controllers)
 
-        n_rotors = int(cfg_fn().get("num_rotors", 4))
+        first_vehicle = next(iter(controllers.values()))
+        n_rotors = int(first_vehicle._thrusters._num_rotors)
 
         recorder = EpisodeTrajectoryRecorder(
             vehicles=record_vehicles,
@@ -1472,7 +1728,7 @@ def main():
     step = 0
 
     reset_manager.reset_all()
-    _draw_lemniscate_viewport(trajectory)
+    _draw_trajectory_viewport(trajectory)
     
 
     if trajectory is not None:
@@ -1504,16 +1760,15 @@ def main():
             world.step(render=not args.headless)
             step += 1
 
-            # Avança o tempo da trajetória e publica a nova referência que o
-            # controlador e o recorder vão usar na PRÓXIMA iteração.
             if trajectory is not None:
                 trajectory.step(physics_dt)
                 _update_goal(trajectory)
 
             if step % episode_steps == 0:
-                reset_manager.reset_all()
                 for backend in backends_order:
                     backend.reset()
+                
+                reset_manager.reset_all()
 
                 # Reset trajectory phase for all envs on episode end
                 if trajectory is not None:

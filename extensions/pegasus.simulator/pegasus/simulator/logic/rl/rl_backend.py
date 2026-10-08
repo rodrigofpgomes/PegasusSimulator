@@ -86,12 +86,14 @@ class RLBackend(Backend):
         self._device = self.vehicle.device or self._device
 
         num_rotors = self.vehicle._thrusters._num_rotors
+        actuator_dim = getattr(self.vehicle, "actuator_dim", num_rotors)
 
+        self._input_reference = torch.zeros((self._n_vehicles, actuator_dim), dtype=torch.float32, device=self._device)
+        
         self._forces = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
         self._torques = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
         self._external_forces = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
         self._external_torques = torch.zeros((self._n_vehicles, self._parts_per_vehicle, 3), dtype=torch.float32, device=self._device)
-        self._input_reference = torch.zeros((self._n_vehicles, num_rotors), dtype=torch.float32, device=self._device)
         self._state_cache = torch.zeros((self._n_vehicles, 13), dtype=torch.float32, device=self._device)
 
         self._received_first_state = False
@@ -119,7 +121,7 @@ class RLBackend(Backend):
         if not self._received_first_state:
             return
 
-        # Direct rotor velocity: _input_reference was already set by the RL env - nothing to do.
+        # Direct rotor velocity: _input_reference was already set by the RL env.
         if self._action_mode == "rotor_velocity_direct":
             return
 
