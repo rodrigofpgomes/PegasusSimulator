@@ -12,6 +12,7 @@ Usage:
 import os
 import sys
 import copy
+import ast
 import argparse
 import importlib
 import carb
@@ -43,7 +44,7 @@ def discover_tasks():
     return sorted(tasks)
 
 def discover_algos():
-    """Finds available algorithms dynamically."""
+    """Finds algorithm modules that expose a top-level train function."""
     repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
     algo_dir = os.path.join(repo_root, "extensions", "pegasus.simulator", "pegasus", "simulator", "logic", "rl", "algorithms")
     
@@ -51,7 +52,13 @@ def discover_algos():
     for f in os.listdir(algo_dir):
         if not f.endswith(".py") or f.startswith("_"):
             continue
-        algos.append(f[:-3])
+
+        # Helper modules such as transition_contract.py are not trainable algorithms
+        with open(os.path.join(algo_dir, f), encoding="utf-8") as source:
+            module = ast.parse(source.read(), filename=f)
+
+        if any(isinstance(node, ast.FunctionDef) and node.name == "train" for node in module.body):
+            algos.append(f[:-3])
 
     return sorted(algos)
 
