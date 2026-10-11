@@ -9,7 +9,6 @@ from __future__ import annotations
 from typing import Any
 import torch
 
-from skrl import config
 from skrl.utils.spaces.torch import flatten_tensorized_space, tensorize_space, unflatten_tensorized_space
 
 class PegasusSkrlWrapper:

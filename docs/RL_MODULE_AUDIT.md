@@ -68,9 +68,24 @@ The separate playback LQR controller also retains attitude-control logic.
 Checks protecting reset orientation and batch layout remain because invalid
 values would be passed directly to PhysX.
 
+## Terminal transition review
+
+`PegasusEnv.step()` captures `final_observation` before resetting completed
+vehicles and returns the new episode's observation for those rows. The wrapper
+flattens both observations with the same policy space. `terminal_next_states()`
+then replaces completed rows with their terminal observations for learning;
+the observation returned by the wrapper remains the next episode's state for
+interaction. PPO uses the terminal state to compute its timeout value, and SAC
+stores the terminal state in replay memory. When supplied, the completion mask
+confirms that every completed row has a terminal observation.
+
+`PegasusSkrlWrapper.reset()` initializes the environment once because each
+task already resets completed rows during `step()`. Its later calls return the
+current observation. The unused `skrl.config` import was removed. `skrl` is
+not installed in this workspace, so the installed library's trainer behavior
+and the PPO timeout override still need an Isaac Sim training run.
+
 ## Next review points
 
-- Check how `skrl_pegasus_wrapper.py` and `algorithms/transition_contract.py`
-  handle terminal observations when a step resets an environment.
 - Review PPO, PPO2 and SAC against their task presets and the installed skrl
   version before simplifying their training code.
