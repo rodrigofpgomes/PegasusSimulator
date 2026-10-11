@@ -25,6 +25,10 @@ from pegasus.simulator.logic.transforms import quaternion_apply
 __all__ = ["ResetManager", "GoalCfg", "InitStateCfg"]
 
 
+# =============================================================================
+# Configuration
+# =============================================================================
+
 @dataclass
 class GoalCfg:
     """Configuration for randomized goal positions."""
@@ -44,8 +48,16 @@ class InitStateCfg:
     guidance_prob: float = 0.1
 
 
+# =============================================================================
+# Reset manager
+# =============================================================================
+
 class ResetManager:
+    """Reset physical vehicle batches, cached states, rotor speeds and goals."""
+
     def __init__(self, vehicles, device: str = "cuda", goal_cfg=None, init_state_cfg=None):
+        """Store the vehicle batches and allocate goal/reset bookkeeping."""
+
         self.vehicles = vehicles
         self.device = device
         self.goal_cfg = goal_cfg
@@ -64,13 +76,27 @@ class ResetManager:
         self._goal_acc = torch.zeros(self.n_vehicles, 3, device=device)
         self._goal_jerk = torch.zeros(self.n_vehicles, 3, device=device)
 
-    def reset_envs(self, env_ids: torch.Tensor, randomize_goals: bool = False, randomize_state: bool = False, init_overrides: dict | None = None):
-        """
-        Reset the selected environments (env_ids).
+    # =============================================================================
+    # Vehicle reset
+    # =============================================================================
 
-        The vehicle states can be randomized according to 'init_state_cfg' when 'randomize_state' 
-        is enabled and also can be selectively overridden through 'init_overrides'. 
-        Goal positions can also be randomized when 'randomize_goals' is enabled.
+    def reset_envs(
+        self,
+        env_ids: torch.Tensor,
+        randomize_goals: bool = False,
+        randomize_state: bool = False,
+        init_overrides: dict | None = None,
+    ) -> None:
+        """
+        Reset selected vehicles and optionally randomize or override their state.
+
+        Args:
+            env_ids (torch.Tensor): Vehicle indices to reset.
+            randomize_goals (bool): Sample new goal positions when configured.
+            randomize_state (bool): Sample state perturbations when configured.
+            init_overrides (dict | None): Selected pose, velocity and rotor
+                values to apply after randomization. Values are indexed by
+                their position within env_ids, not by global vehicle index.
         """
         if env_ids.numel() == 0:
             return
@@ -91,7 +117,7 @@ class ResetManager:
             
             rotor_norm = torch.empty((n, num_rotors), device=self.device).uniform_(-1.0, 0.0)
             
-            # Select environments that will start from the nominal initial state
+            # Some environments use the nominal spawn state as guidance
             guided = torch.rand(n, device=self.device) < self.init_state_cfg.guidance_prob
             self._last_guided[env_ids] = guided
             
@@ -109,7 +135,7 @@ class ResetManager:
             guided = torch.zeros(n, dtype=torch.bool, device=self.device)
             self._last_guided[env_ids] = False
 
-        # Apply optional state overrides to the selected environments (cruise starts)
+        # Apply explicit initial flight conditions to the requested rows
         if init_overrides is not None:
             mask = init_overrides.get("mask")
             
@@ -121,7 +147,7 @@ class ResetManager:
             
             if mask.any():
                 
-                # Initialize the orientation buffer from the nominal state if needed
+                # Start from the nominal orientation when none was randomized
                 if ori_rand is None:
                     ori_rand = self.main_vehicle._init_orientation[env_ids].to(device=self.device, dtype=torch.float32).clone()
                     
@@ -137,11 +163,11 @@ class ResetManager:
                 if "rotor_norm" in init_overrides:
                     rotor_norm[mask] = init_overrides["rotor_norm"].to(self.device)[mask]
                     
-                # Prevent overridden environments from being replaced by the guided initial state
+                # Explicit overrides take precedence over guided nominal starts
                 guided = guided & ~mask
                 self._last_guided[env_ids] = guided
 
-        # Build and apply the reset state for each vehicle
+        # Apply the same selected environment IDs to every comparison vehicle
         for vehicle in self.vehicles:
             base_pos = vehicle._init_pos[env_ids].to(device=self.device, dtype=torch.float32)
             pos = base_pos + pos_offset
@@ -159,22 +185,23 @@ class ResetManager:
                 lin_vel[guided] = 0.0
                 ang_vel[guided] = 0.0
 
-            # Both PhysX and the cached state must receive the same unit quaternion.
+            # Normalize the orientation shared by PhysX and the cached state
             norm = torch.linalg.vector_norm(ori, dim=-1, keepdim=True)
             if not torch.isfinite(ori).all() or (norm < 1e-8).any():
                 raise ValueError("Reset orientation must be finite and nonzero")
             ori = ori / norm
-            # Apply the reset pose and velocities to the simulator and vehicle state
+            # Set PhysX root prims, then synchronize the vehicle and its backends
             self._reset_vehicle_pose(vehicle, env_ids, pos, ori, lin_vel, ang_vel)
             vehicle.set_state_batch(env_ids, positions=pos, attitudes=ori, linear_velocity=lin_vel, angular_velocity=ang_vel)
             
-            # Convert normalized rotor commands to angular velocities and reset the thruster state
+            # Convert normalized rotor commands to angular velocities
             min_w = vehicle._thrusters.min_rotor_velocity.to(device=self.device).reshape(-1)
             max_w = vehicle._thrusters.max_rotor_velocity.to(device=self.device).reshape(-1)
             
             omega = (rotor_norm + 1.0) * 0.5 * (max_w - min_w).unsqueeze(0) + min_w.unsqueeze(0)
             
             vehicle._thrusters._velocity[env_ids] = omega
+            # Keep the policy's normalized rotor observation consistent with PhysX
             if not hasattr(vehicle._thrusters, "_reset_rotor_norm"):
                 vehicle._thrusters._reset_rotor_norm = torch.zeros_like(vehicle._thrusters._velocity)
             vehicle._thrusters._reset_rotor_norm[env_ids] = rotor_norm
@@ -182,11 +209,13 @@ class ResetManager:
                 vehicle._thrusters._input_reference[env_ids] = omega
             if hasattr(vehicle._thrusters, "sync_to_models"):
                 vehicle._thrusters.sync_to_models()
+            # Discard loads and surface angles retained by the previous episode
             for name in ("_forces", "_torques", "_last_forces_local", "_last_torques_local", "_surface_deflections"):
                 buffer = getattr(vehicle, name, None)
                 if buffer is not None:
                     buffer[env_ids] = 0.0
 
+        # Goals belong to the new episode and are updated after the physical reset
         if randomize_goals and self.goal_cfg is not None:
             self._randomize_goals(env_ids)
         else:
@@ -196,7 +225,9 @@ class ResetManager:
             self._goal_acc[env_ids] = 0.0
             self._goal_jerk[env_ids] = 0.0
 
-    def _reset_vehicle_pose(self, vehicle, env_ids, pos, ori, lin_vel, ang_vel):
+    def _reset_vehicle_pose(self, vehicle, env_ids, pos, ori, lin_vel, ang_vel) -> None:
+        """Write world pose and velocity to the root PhysX prims only."""
+
         idx = env_ids.to(dtype=torch.long, device=self.device)
         # PhysX root velocity is in the world frame at the root COM; the reset API uses body rates.
         ori = ori / torch.linalg.vector_norm(ori, dim=-1, keepdim=True).clamp_min(1e-12)
@@ -209,6 +240,8 @@ class ResetManager:
         )
 
     def _axis_limit(self, value, name: str) -> torch.Tensor:
+        """Return a three-axis limit from a scalar or length-three setting."""
+
         limit = torch.as_tensor(value, dtype=torch.float32, device=self.device)
         if limit.ndim == 0:
             return limit.repeat(3)
@@ -217,6 +250,8 @@ class ResetManager:
         return limit.reshape(3)
 
     def _random_quaternions(self, n: int) -> torch.Tensor:
+        """Sample unit quaternions with bounded rotation angle."""
+
         max_angle = self.init_state_cfg.max_angle_deg * torch.pi / 180.0
         u = torch.rand(n, device=self.device)
         v = torch.rand(n, device=self.device)
@@ -231,12 +266,20 @@ class ResetManager:
         q[:, 1:] = axis * torch.sin(half).unsqueeze(1)
         return q
 
-    def reset_all(self):
+    def reset_all(self) -> None:
+        """Reset every environment using the configured randomization."""
+
         ids = torch.arange(self.n_vehicles, device=self.device)
         self.reset_envs(ids, randomize_goals=self.goal_cfg is not None,
                         randomize_state=self.init_state_cfg is not None)
 
-    def _randomize_goals(self, env_ids: torch.Tensor):
+    # =============================================================================
+    # Goals
+    # =============================================================================
+
+    def _randomize_goals(self, env_ids: torch.Tensor) -> None:
+        """Sample goal positions for selected environments."""
+
         if self.goal_cfg is None:
             return
         xy_low, xy_high = self.goal_cfg.goal_pos_xy_range
@@ -244,9 +287,9 @@ class ResetManager:
         self._goal_pos[env_ids, :2] = torch.zeros_like(self._goal_pos[env_ids, :2]).uniform_(xy_low, xy_high)
         self._goal_pos[env_ids, :2] += self.init_pos[env_ids, :2]
         self._goal_pos[env_ids, 2] = torch.zeros_like(self._goal_pos[env_ids, 2]).uniform_(z_low, z_high)
-        self._goal_vel[env_ids] = torch.zeros_like(self._goal_pos[env_ids])
-        self._goal_acc[env_ids] = torch.zeros_like(self._goal_pos[env_ids])
-        self._goal_jerk[env_ids] = torch.zeros_like(self._goal_pos[env_ids])
+        self._goal_vel[env_ids] = 0.0
+        self._goal_acc[env_ids] = 0.0
+        self._goal_jerk[env_ids] = 0.0
         guided = self._last_guided[env_ids]
         if guided.any():
             guided_ids = env_ids[guided]
@@ -255,25 +298,35 @@ class ResetManager:
             self._goal_acc[guided_ids] = 0.0
             self._goal_jerk[guided_ids] = 0.0
 
-    def set_goal_cfg(self, goal_cfg):
+    def set_goal_cfg(self, goal_cfg) -> None:
+        """Replace the goal sampling configuration for later resets."""
         self.goal_cfg = goal_cfg
+
+    # =============================================================================
+    # Properties
+    # =============================================================================
 
     @property
     def init_pos(self):
+        """Initial spawn positions of the main vehicle batch."""
         return self._init_pos
 
     @property
     def goal_pos(self):
+        """Current goal positions in world coordinates."""
         return self._goal_pos
 
     @property
     def goal_vel(self):
+        """Current goal velocities in world coordinates."""
         return self._goal_vel
 
     @property
     def goal_acc(self):
+        """Current goal accelerations in world coordinates."""
         return self._goal_acc
 
     @property
     def goal_jerk(self):
+        """Current goal jerks in world coordinates."""
         return self._goal_jerk

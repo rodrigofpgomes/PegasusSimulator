@@ -35,10 +35,41 @@ The exact removed source remains available in Git history:
 git show 64a14a7:"extensions/pegasus.simulator/pegasus/simulator/logic/rl/reset_manager copy.py"
 ```
 
+## Reset lifecycle review
+
+`PegasusEnv.step()` advances physics, computes reward and termination, captures
+the terminal observation, and then asks the task to reset completed rows. The
+observation returned after that reset starts the next episode. Tasks call
+`ResetManager.reset_envs()`, which writes the root pose and velocity to PhysX,
+updates the vehicle state cache, and forwards the new state to its backends.
+
+`RLBackend.set_state()` now clears forces, torques, rotor commands and external
+disturbances for only the reset environments. `RLBackend.reset()` clears those
+buffers for a full reset. This prevents the previous episode's commands from
+being reused after a teleport while leaving other vehicles' commands intact.
+The playback agent can then prime its own rotor reference in its `set_state()`
+override.
+
+The task mode `direct_force` is translated to the vehicle mode `forces_torques`
+when the backend starts. Without that translation, direct-force RL tasks fail
+at `vehicle.set_input_mode()` before training starts.
+
+The unused optional attitude controller inside `RLBackend.update()` was removed.
+The current RL tasks use `direct_force` or `rotor_velocity_direct`; the simpler
+`rotor_velocity` wrench-to-rotor allocation remains available and reads the
+vehicle's resolved body index. The controller's
+exact prior code is recoverable with:
+
+```bash
+git show 553538e:extensions/pegasus.simulator/pegasus/simulator/logic/rl/rl_backend.py
+```
+
+The separate playback LQR controller also retains attitude-control logic.
+Checks protecting reset orientation and batch layout remain because invalid
+values would be passed directly to PhysX.
+
 ## Next review points
 
-- Check the reset lifecycle across `base_env.py`, `reset_manager.py` and
-  `rl_backend.py`, including partial airborne resets.
 - Check how `skrl_pegasus_wrapper.py` and `algorithms/transition_contract.py`
   handle terminal observations when a step resets an environment.
 - Review PPO, PPO2 and SAC against their task presets and the installed skrl

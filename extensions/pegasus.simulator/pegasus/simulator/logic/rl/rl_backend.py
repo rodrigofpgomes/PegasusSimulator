@@ -2,7 +2,7 @@
 | File: rl_backend.py
 | Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
-| Description: Backend used to interface the multirotor simulator with vectorized RL environments.
+| Description: Backend connecting batched vehicles to vectorized RL environments.
 """
 
 __all__ = ["RLBackend"]
@@ -10,7 +10,6 @@ __all__ = ["RLBackend"]
 import torch
 from pegasus.simulator.logic.backends.backend import Backend
 from pegasus.simulator.logic.state_batch import StateBatch
-from pegasus.simulator.logic.transforms import quaternion_to_matrix
 
 import isaacsim.core.utils.prims as prim_utils
 from omni.isaac.core.prims import XFormPrimView
@@ -18,17 +17,18 @@ from pxr import UsdGeom, Gf
 
 class RLBackend(Backend):
     """
-    Backend for RL training with vectorized multirotor environments. Handles forces, 
-    torques, and state caching between the simulation physics steps and the RL policy.
+    Connect a batched vehicle to its vectorized RL environment.
+
+    Stores actuator references, per-part loads and the latest vehicle state.
+    The vehicle reads these buffers during each physics step.
     """
 
-    def __init__(self, n_vehicles: int, action_mode: str = "direct_force", inner_loop: bool = False, device: str | None = None):
-        """Initializes the backend with vehicle count, action mode, and control loop preference."""
+    def __init__(self, n_vehicles: int, action_mode: str = "direct_force", device: str | None = None):
+        """Initialize the batched backend and its control mode."""
         super().__init__(config=None)
 
         self._n_vehicles = n_vehicles
         self._action_mode = action_mode
-        self._inner_loop = inner_loop
 
         # Initialized later in start()
         self._parts_per_vehicle = None
@@ -43,9 +43,6 @@ class RLBackend(Backend):
         self._input_reference = None
         self._state_cache = None
         self._received_first_state = False
-
-        self._Kr = None
-        self._Kw = None
 
         self._goal_marker_view = None
         self._goal_marker_paths = []
@@ -85,6 +82,8 @@ class RLBackend(Backend):
         self._parts_per_vehicle = self.vehicle.parts_per_vehicle
         self._device = self.vehicle.device or self._device
 
+        # A glider also commands control surfaces, so its action width may
+        # exceed the number of physical rotors
         num_rotors = self.vehicle._thrusters._num_rotors
         actuator_dim = getattr(self.vehicle, "actuator_dim", num_rotors)
 
@@ -98,87 +97,36 @@ class RLBackend(Backend):
 
         self._received_first_state = False
 
-        self._Kr = torch.diag(torch.tensor([3.5, 3.5, 3.5], dtype=torch.float32, device=self._device))
-        self._Kw = torch.diag(torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32, device=self._device))
-
-        self.vehicle.set_input_mode(self._action_mode)
+        # Tasks call this mode direct_force; vehicles name the same mode forces_torques
+        vehicle_mode = "forces_torques" if self._action_mode == "direct_force" else self._action_mode
+        self.vehicle.set_input_mode(vehicle_mode)
 
     def stop(self):
         """Callback for when the simulation stops (unused)."""
         pass
 
     def reset(self):
-        """Clears all force, torque, and state buffers."""
+        """Clear backend commands, disturbances and cached state on a full reset."""
         if self._forces is not None:
             self._forces.zero_()
             self._torques.zero_()
+            self._external_forces.zero_()
+            self._external_torques.zero_()
             self._input_reference.zero_()
             self._state_cache.zero_()
         self._received_first_state = False
 
     def update(self, dt: float):
-        """Transforms requested RL actions into forces or rotor speeds before the physics step."""
-        if not self._received_first_state:
+        """Allocate a requested body wrench to rotors in rotor_velocity mode."""
+        # Direct force and direct rotor-speed modes already hold their commands
+        if not self._received_first_state or self._action_mode != "rotor_velocity":
             return
 
-        # Direct rotor velocity: _input_reference was already set by the RL env.
-        if self._action_mode == "rotor_velocity_direct":
-            return
-
-        if self._action_mode == "rotor_velocity":
-            if self._inner_loop:
-                # Get the desired forces
-                F_des = self._forces[:, 0, :]
-
-                # Get the current state
-                q = self._state_cache[:, 6:10]
-                w = self._state_cache[:, 10:13]
-                R = quaternion_to_matrix(q)
-            
-                # Get the current axis Z_B (given by the last column of the rotation matrix)
-                Z_B = R[:, :,2]
-
-                # Compute the desired total thrust in Z_B direction (u_1)
-                u_1 = torch.sum(F_des * Z_B, dim=1)
-
-                # Compute the desired body-frame axis Z_b
-                Z_b_des = F_des / torch.linalg.norm(F_des, dim=1, keepdim=True)
-
-                # Desired yaw (fixed to zero)
-                yaw_ref = torch.zeros((self._n_vehicles,), dtype=torch.float32, device=self._device)
-
-                # Compute X_C_des
-                X_c_des = torch.stack((torch.cos(yaw_ref), torch.sin(yaw_ref), torch.zeros_like(yaw_ref),), dim=1)
-
-                # Compute Y_b_des
-                Z_b_cross_X_c = torch.cross(Z_b_des, X_c_des, dim=1)
-                Y_b_des = Z_b_cross_X_c / torch.linalg.norm(Z_b_cross_X_c, dim=1, keepdim=True)
-
-                # Compute X_b_des
-                X_b_des = torch.cross(Y_b_des, Z_b_des, dim=1)
-
-                # Compute the desired rotation R_des = [X_b_des | Y_b_des | Z_b_des]
-                R_des = torch.stack((X_b_des, Y_b_des, Z_b_des), dim=2)
-
-                # Compute the rotation error
-                e_R_mat = torch.matmul(R_des.transpose(1, 2), R) - torch.matmul(R.transpose(1, 2), R_des)
-                e_R = 0.5 * self.vee_batch(e_R_mat)
-
-                # desired angular velocity
-                w_des = torch.zeros_like(w)
-
-                # Compute the angular velocity error
-                e_w = w - w_des
-
-                # Compute the torques to apply on the rigid body
-                tau = -(e_R @ self._Kr.T) - (e_w @ self._Kw.T)
-            else:
-                # Direct force and torque bypass
-                u_1 = self._forces[:, 0, 2]
-                tau = self._torques[:, 0, :]
-
-            # Convert forces/torques to rotor angular velocities
-            self._input_reference = self.vehicle.force_and_torques_to_velocities(u_1, tau)
+        # Convert the requested body thrust and torque to rotor velocities
+        body_index = self.vehicle.body_index
+        u_1 = self._forces[:, body_index, 2]
+        tau = self._torques[:, body_index, :]
+        self._input_reference = self.vehicle.force_and_torques_to_velocities(u_1, tau)
 
     def update_state(self, state: StateBatch):
         """Caches the new physics state after a simulation step."""
@@ -199,7 +147,7 @@ class RLBackend(Backend):
         pass
 
     def input_reference(self) -> torch.Tensor:
-        """Returns the desired rotor velocities (used in 'rotor_velocity' mode)."""
+        """Return rotor speeds and any additional actuator commands."""
         return self._input_reference
 
     def external_forces_and_torques(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -222,9 +170,16 @@ class RLBackend(Backend):
 
     def set_state(self, env_ids: torch.Tensor, positions: torch.Tensor, attitudes: torch.Tensor, 
                         linear_velocity: torch.Tensor | None = None, angular_velocity: torch.Tensor | None = None):
-        """Overrides the state matrix for selected environments (e.g., during resets)."""
+        """Replace selected state rows and clear commands from their previous episodes."""
         if self._state_cache is None or env_ids.numel() == 0:
             return
+
+        # Keep the remaining vehicles' commands and disturbances unchanged
+        self._forces[env_ids] = 0.0
+        self._torques[env_ids] = 0.0
+        self._external_forces[env_ids] = 0.0
+        self._external_torques[env_ids] = 0.0
+        self._input_reference[env_ids] = 0.0
 
         lin_vel = linear_velocity if linear_velocity is not None else torch.zeros((env_ids.numel(), 3), device=self._device, dtype=self._state_cache.dtype)
         ang_vel = angular_velocity if angular_velocity is not None else torch.zeros((env_ids.numel(), 3), device=self._device, dtype=self._state_cache.dtype)
@@ -301,8 +256,3 @@ class RLBackend(Backend):
         orientations[:, 0] = 1.0
 
         self._goal_marker_view.set_world_poses(positions=positions, orientations=orientations, indices=indices)
-
-    @staticmethod
-    def vee_batch(S):
-        """Computes the vee map operation on a batch of skew-symmetric matrices."""
-        return torch.stack((-S[:, 1, 2], S[:, 0, 2], -S[:, 0, 1]), dim=1)

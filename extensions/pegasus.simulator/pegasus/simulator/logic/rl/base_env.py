@@ -109,7 +109,7 @@ class PegasusEnv(ABC):
     # -------------------------------------------
 
     def step(self, actions: torch.Tensor):
-        """Advances the environment by one policy step."""
+        """Advance physics, record terminal data, then reset completed episodes."""
         self.extras = {}
         self._pre_physics_step(actions)
 
@@ -127,13 +127,16 @@ class PegasusEnv(ABC):
         self.reset_time_outs = truncated
         self.extras["time_outs"] = truncated.view(self.num_envs, 1)
 
-        # Reset environments that have terminated or reached timeout
-        reset_ids = (terminated | truncated).nonzero(as_tuple=False).squeeze(-1)
+        # Keep the physical terminal observation before the task teleports any
+        # completed vehicle. The wrapper uses it for learning after autoreset.
+        done = terminated | truncated
+        reset_ids = done.nonzero(as_tuple=False).squeeze(-1)
         if reset_ids.numel() > 0:
             self.extras["final_observation"] = self._get_observations()["policy"].clone()
-            self.extras["final_observation_mask"] = (terminated | truncated)
+            self.extras["final_observation_mask"] = done
             self._reset_idx(reset_ids)
 
+        # The returned observation belongs to the next episode for reset rows
         obs = self._get_observations()
         return obs, reward, terminated, truncated, dict(self.extras)
 
