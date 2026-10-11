@@ -10,26 +10,31 @@ does not establish Isaac Sim training performance or scientific conclusions.
    the same checkpoint can be evaluated with different motor dynamics or USD.
 2. Select one representative task for each experimental question. Record its
    observation, action, reward, reset distribution, trajectory and physics in
-   its README before changing its path or training it again.
-3. Reorganize selected tasks by vehicle. Update task IDs in scripts, manifests
-   and checkpoint metadata together. Keep historical variants in the source
-   copy and Git history until the selected task passes an Isaac Sim smoke test.
+   its README before retraining it.
+3. Reorganize selected tasks by vehicle. Their old checkpoints are not inputs
+   to the new experiments, so old task IDs need no compatibility aliases.
+   Keep historical variants in the source copy for comparison of methods.
 4. Consolidate playback, controller adapters and dashboard around the final
    recorded data schema after the task contracts are stable.
 
 The shared physical presets now live in
 `pegasus.simulator.logic.vehicles.vehicle_physics`. `get_vehicle_physics()`
-returns a deep copy. Task-specific `vehicle_physics_cfg` takes precedence, so
-an intentional experimental physics change is retained. Training and single
-vehicle playback select the batch class and asset from `env_cfg.vehicle`.
+returns a deep copy. Selected tasks for retraining should use this preset for
+motor parameters. A task-specific override is appropriate only for an explicit
+physics comparison and should be named in the task README. In `direct_force`
+mode, the vehicle applies the requested body wrench without advancing the
+thruster model, so motor coefficients do not affect that actuation path. The
+vehicle USD, mass, inertia and body layout still affect the dynamics. Training
+and single vehicle playback select the batch class and asset from
+`env_cfg.vehicle`.
 Multi-vehicle playback uses the same preset and replaces it with a task's
 explicit physics when evaluating a checkpoint. The active branch has no
 Crazyflie USD asset; the Crazyflie physics preset is available, but a
 Crazyflie evaluation cannot run until the asset is added and registered.
-The seven ShuttleGlider tasks already on this branch contain distinct physical
-overrides, including motor time constants and aerodynamic coefficients. Their
-overrides remain in place; replacing them with the common baseline would change
-the experiments and invalidate comparisons with their existing checkpoints.
+The seven ShuttleGlider tasks already on this branch now use the shared motor
+preset for new training. `task5_v3_offload2` retains its explicit aerodynamic
+coefficient override. The earlier results used different motor settings and
+must not be compared as if they used this new configuration.
 
 ## Script dependency map
 
@@ -55,24 +60,24 @@ they are not 145 independent experiments ready to train.
 | Future family | Questions to retain | Candidate source |
 | --- | --- | --- |
 | `iris_crazyflie/` | Initial Isaac Lab and external RAPTOR baselines. | `double_integrator/01_isaac_lab_{iris,crazyflie}`; Iris RAPTOR variants. Crazyflie requires an asset. |
-| `shuttle/` | Isaac Lab starting point, quadratic/exponential/death/Lyapunov rewards, then RAPTOR-style pretraining with static and Langevin references. | `double_integrator/02_quadratic` through `07_curriculum_ppo2`, `shuttle_testes`, and `raptor_pretrain_folder`. The `double_integrator` variants must be checked for their declared vehicle before inclusion. |
+| `shuttle/` | Isaac Lab starting point, quadratic/exponential/death/Lyapunov rewards, then RAPTOR-style pretraining with static and Langevin references. | `shuttle_testes` provides Shuttle rotor-control candidates. The `double_integrator` reward variants are Iris tasks; port their reward methodology to a Shuttle task rather than relabeling the vehicle. RAPTOR pretraining variants are also Iris tasks and provide a method to adapt. |
 | `easyglider/` | Future fixed-wing training and a curriculum adapted to aerodynamic flight. | Empty until a task with four actions is implemented and checked. |
-| `shuttle_glider/` | Without curriculum, then curriculum; first without surface control, then with all surfaces; compare flight regimes, aerodynamic loads and actuation. | `shuttle_glider/sg_f2_rep*` and `shuttle_glider2/vehicle_final/*`, especially `task5_v1_tracking`, `task5_all7_6`, `c_task5_all5` and the physical reward variants. |
+| `shuttle_glider/` | Without curriculum, then curriculum; first without surface control, then with all surfaces; compare flight regimes, aerodynamic loads and actuation. | `no_surfaces/` is adapted from `sg_f2_rep3` with shared physics. The `vehicle_final` variants are candidates for later surface and curriculum comparisons. |
 
 The table identifies candidates, not an equivalence between similarly named
-variants. For example, the double-integrator study says stages 2–7 use a
-three-dimensional acceleration action; that differs from four-rotor Shuttle
-control. Likewise, old RAPTOR tasks use `rolling_moment_coefficient` and
-`motor_time_constant`, which the cleaned thrusters reject. Their task physics
-must be translated explicitly before they can be run in this branch.
+variants. The double-integrator study uses a three-dimensional acceleration
+action for stages 2–7; that differs from four-rotor Shuttle control. Old
+RAPTOR tasks also use `rolling_moment_coefficient` and `motor_time_constant`,
+which the cleaned thrusters reject. Selected rotor-control tasks use the new
+shared preset instead of translating each legacy motor dictionary.
 
 ## Experiment comparison contract
 
 For each selected task, record the USD and physical preset/override, physics
 and policy frequencies, observation order and units, action mapping, reward
 formula, termination, initial-state distribution, goal generator and curriculum
-levels. Retain an experiment ID in checkpoint metadata and evaluation CSVs so
-that changing a Python package path does not change the meaning of a result.
+levels. Give new runs an experiment ID in checkpoint metadata and evaluation
+CSVs so the result is tied to a method and physical configuration.
 Use identical evaluation trajectories, seeds and vehicle parameters when
 comparing reward variants. For the ShuttleGlider, include rotor and surface
 commands, airspeed, angle of attack, aerodynamic forces and episode outcome in

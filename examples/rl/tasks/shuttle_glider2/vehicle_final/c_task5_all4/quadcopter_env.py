@@ -15,6 +15,7 @@ import torch
 
 from pegasus.simulator.logic.rl.aligned_trim import AlignedTrimMixin
 from pegasus.simulator.logic.rl.base_env import PegasusEnv, PegasusEnvCfg
+from pegasus.simulator.logic.vehicles.vehicle_physics import get_vehicle_physics
 from pegasus.simulator.logic.rl.reset_manager import InitStateCfg
 from pegasus.simulator.logic.transforms import euler_angles_to_matrix, matrix_to_quaternion, quaternion_to_matrix
 
@@ -25,39 +26,12 @@ DE_MAX = math.radians(25.0)   # elevator
 DA_MAX = math.radians(25.0)   # aileron
 DR_MAX = math.radians(25.0)   # rudder
 
-vehicle_physics_cfg = {
-    "shuttle_thrust_cfg": {
-        "num_rotors": 4,
-        "rotor_constant": [1.709716e-05, 1.709716e-05, 1.709716e-05, 1.709716e-05],
-        "reaction_moment_coefficient": [1e-06, 1e-06, 1e-06, 1e-06],
-        "rot_dir": [-1, -1, 1, 1],
-        "min_rotor_velocity": [0, 0, 0, 0],
-        "max_rotor_velocity": [1400, 1400, 1400, 1400],
-        "motor_time_constant_up": [0.008, 0.008, 0.008, 0.008],
-        "motor_time_constant_down": [0.008, 0.008, 0.008, 0.008],
-    },
-    "glider_thrust_cfg": {
-        "rotor_constant": [8.5e-6],
-        "reaction_moment_coefficient": [1.53e-7], # 0.018 * 8.5e-6
-        "rot_dir": [-1.0],
-        "min_rotor_velocity": 0.0,
-        # Full puller authority (was capped at 1100 in curriculum2/3). At 3500 rad/s
-        # the puller gives ~104 N (>2x weight), enough to reach the >=12 m/s
-        # wing-offload regime within one episode.
-        "max_rotor_velocity": 3500.0,
-        "motor_time_constant_up": 0.0,
-        "motor_time_constant_down": 0.0,
-    },
-    "aerodynamics_cfg": {},
-}
-
-
 @dataclass
 class QuadcopterEnvCfg(PegasusEnvCfg):
     trim_elevator_soft_ratio: float = 0.8
     trim_search_iterations: int = 24
 
-    physics_revision: str = "aligned-com-review-v2"
+    physics_revision: str = "shared-motors-v1"
     observation_space: int = 40
     action_space: int = 8
     state_space: int = 0
@@ -68,7 +42,7 @@ class QuadcopterEnvCfg(PegasusEnvCfg):
 
     action_mode: str = "rotor_velocity_direct"
     vehicle: str = "Shuttle_glider2"
-    vehicle_physics_cfg: Any = field(default_factory=lambda: vehicle_physics_cfg)
+    vehicle_physics_cfg: Any = field(default_factory=lambda: get_vehicle_physics("Shuttle_glider2"))
     
     # Aileron
     delta_a_min = math.radians(-8.85)

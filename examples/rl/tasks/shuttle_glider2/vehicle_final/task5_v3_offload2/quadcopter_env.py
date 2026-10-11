@@ -15,6 +15,7 @@ import torch
 
 from pegasus.simulator.logic.rl.aligned_trim import AlignedTrimMixin
 from pegasus.simulator.logic.rl.base_env import PegasusEnv, PegasusEnvCfg
+from pegasus.simulator.logic.vehicles.vehicle_physics import get_vehicle_physics
 from pegasus.simulator.logic.rl.reset_manager import InitStateCfg
 from pegasus.simulator.logic.transforms import euler_angles_to_matrix, matrix_to_quaternion, quaternion_to_matrix
 
@@ -23,75 +24,45 @@ from .trajectory import TrackReferenceGenerator
 from .reward_terms import compute_reward_terms
 
 
-vehicle_physics_cfg = {
-    "shuttle_thrust_cfg": {
-        "num_rotors": 4,
-        "rotor_constant": [1.709716e-05, 1.709716e-05, 1.709716e-05, 1.709716e-05],
-        "reaction_moment_coefficient": [1e-06, 1e-06, 1e-06, 1e-06],
-        "rot_dir": [-1, -1, 1, 1],
-        "min_rotor_velocity": [0, 0, 0, 0],
-        "max_rotor_velocity": [1400, 1400, 1400, 1400],
-        "motor_time_constant_up": [0.008, 0.008, 0.008, 0.008],
-        "motor_time_constant_down": [0.008, 0.008, 0.008, 0.008],
-    },
-    "glider_thrust_cfg": {
-        "rotor_constant": [8.5e-6],
-        "reaction_moment_coefficient": [1.53e-7], # 0.018 * 8.5e-6
-        "rot_dir": [-1.0],
-        "min_rotor_velocity": 0.0,
-        # Full puller authority (was capped at 1100 in curriculum2/3). At 3500 rad/s
-        # the puller gives ~104 N (>2x weight), enough to reach the >=12 m/s
-        # wing-offload regime within one episode.
-        "max_rotor_velocity": 3500.0,
-        "motor_time_constant_up": 0.0,
-        "motor_time_constant_down": 0.0,
-    },
-    "aerodynamics_cfg": {'eval_at_ref': True,
- 'geometry': {'rho': 1.2041,
-              'S': 0.416,
-              'b': 1.8,
-              'c': 0.15407407407407406,
-              'AR': 7.788461538461539,
-              'e': 0.8523,
-              'r_origin': (0.0, 0.0, -0.2803),
-              'r_com': (0.0, 0.0, -0.2772)},
- 'coefficients': {'CL0': 0.36986,
-                  'CLa': 3.679875,
-                  'CLq': 16.413084,
-                  'CLde': 0.11235702362515444,
-                  'CD0': 0.00759,
-                  'CDq': -0.549541,
-                  'CDde': 0.002521014298575622,
-                  'Cm0': 0.57912,
-                  'Cma': 6.591829,
-                  'Cmq': -35.807747,
-                  'Cmde': 0.48053970277622143,
-                  'CY0': 0.0,
-                  'CYb': 0.187754,
-                  'CYp': -0.032506,
-                  'CYr': 0.222424,
-                  'CYda': 0.012261296815799617,
-                  'CYdr': -0.07087487925768284,
-                  'Cl0': 0.0,
-                  'Clb': -0.062425,
-                  'Clp': -0.392788,
-                  'Clr': -0.137367,
-                  'Clda': 0.18288812820575878,
-                  'Cldr': 0.00813600069085769,
-                  'Cn0': 0.0,
-                  'Cnb': -0.108424,
-                  'Cnp': 0.033202,
-                  'Cnr': -0.129973,
-                  'Cnda': 0.0,
-                  'Cndr': 0.04073729923380153,
-                  'alpha0': 0.3391428111,
-                  'M_sig': 15.0}},
-}
+def make_vehicle_physics_cfg():
+    """Use common propulsion with this experiment's aerodynamic coefficients."""
+    physics = get_vehicle_physics("Shuttle_glider2")
+    physics["aerodynamics_cfg"] = {
+        "eval_at_ref": True,
+        "geometry": {
+            "rho": 1.2041,
+            "S": 0.416,
+            "b": 1.8,
+            "c": 0.15407407407407406,
+            "AR": 7.788461538461539,
+            "e": 0.8523,
+            "r_origin": (0.0, 0.0, -0.2803),
+            "r_com": (0.0, 0.0, -0.2772),
+        },
+        "coefficients": {
+            "CL0": 0.36986, "CLa": 3.679875, "CLq": 16.413084,
+            "CLde": 0.11235702362515444, "CD0": 0.00759,
+            "CDq": -0.549541, "CDde": 0.002521014298575622,
+            "Cm0": 0.57912, "Cma": 6.591829, "Cmq": -35.807747,
+            "Cmde": 0.48053970277622143, "CY0": 0.0,
+            "CYb": 0.187754, "CYp": -0.032506, "CYr": 0.222424,
+            "CYda": 0.012261296815799617,
+            "CYdr": -0.07087487925768284, "Cl0": 0.0,
+            "Clb": -0.062425, "Clp": -0.392788, "Clr": -0.137367,
+            "Clda": 0.18288812820575878,
+            "Cldr": 0.00813600069085769, "Cn0": 0.0,
+            "Cnb": -0.108424, "Cnp": 0.033202,
+            "Cnr": -0.129973, "Cnda": 0.0,
+            "Cndr": 0.04073729923380153,
+            "alpha0": 0.3391428111, "M_sig": 15.0,
+        },
+    }
+    return physics
 
 
 @dataclass
 class QuadcopterEnvCfg(PegasusEnvCfg):
-    physics_revision: str = "aligned-com-review-v2"
+    physics_revision: str = "shared-motors-custom-aero-v1"
     observation_space: int = 40
     action_space: int = 8
     state_space: int = 0
@@ -102,7 +73,7 @@ class QuadcopterEnvCfg(PegasusEnvCfg):
 
     action_mode: str = "rotor_velocity_direct"
     vehicle: str = "Shuttle_glider2"
-    vehicle_physics_cfg: Any = field(default_factory=lambda: vehicle_physics_cfg)
+    vehicle_physics_cfg: Any = field(default_factory=make_vehicle_physics_cfg)
     
     # Aileron
     delta_a_min = math.radians(-8.85)
