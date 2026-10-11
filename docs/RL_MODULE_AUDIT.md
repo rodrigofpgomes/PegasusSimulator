@@ -55,11 +55,22 @@ being reused after a teleport while leaving other vehicles' commands intact.
 The playback agent can then prime its own rotor reference in its `set_state()`
 override.
 
-`ResetManager.reset_envs()` initializes rotor velocities and normalized rotor
-observations. It no longer writes the motor input reference, because the first
-backend supplies the next command before the thruster model updates. The
-ShuttleGlider adapter still synchronizes the initialized velocities into its
-two physical propulsion models.
+`ResetManager.reset_envs()` initializes rotor velocities. The normalized reset
+value is stored only when the thruster interface already exposes
+`_reset_rotor_norm`: the ShuttleGlider adapter provides it, and ShuttleGlider
+tasks read it immediately to initialize action history. Regular thrusters do
+not acquire this extra field. The reset manager does not call
+`sync_to_models()`: `ShuttleGliderBatch2.update()` does so before either
+physical propulsion model advances. The method remains necessary there.
+
+The reset manager no longer clears vehicle force, torque or surface buffers.
+Each vehicle starts its next physics update by zeroing its applied-force
+buffers; `VehicleBatch` replaces its last-applied wrench at the end of that
+update. Rotor-mode gliders replace surface deflections from the first backend.
+Tasks build reset observations from state, goals and their own action history,
+not these vehicle buffers. `RLBackend.set_state()` still clears backend commands
+and external disturbances for reset rows, preventing previous-episode loads
+from reaching the next physics step.
 
 `PegasusEnv` now builds the policy and optional critic spaces directly. Four
 unused copies of config dimensions and episode duration were removed; the
@@ -83,6 +94,16 @@ restricted to `MultirotorBatch`. Its thrust projection is limited to positive
 values because the rotors cannot reverse their thrust direction. The current
 task presets still use `direct_force` or `rotor_velocity_direct`; the inner
 loop is available for future multirotor tasks.
+
+The restored inner loop follows the original geometric construction: desired
+body Z from force, fixed yaw reference, orthonormal desired attitude, vee-map
+attitude error, and proportional attitude/rate moments. It is **not exactly the
+same calculation** as the original `553538e` version. The task supplies force
+in body axes, so the current loop rotates it to world axes before constructing
+the target; it also uses the resolved body index, clips negative collective
+thrust, handles zero force and parallel reference axes, and adds the requested
+body moment as a feedforward term. The original loop used part index zero,
+treated its force as already world-aligned, and ignored the requested moment.
 
 The separate playback LQR controller also retains attitude-control logic.
 Checks protecting reset orientation and batch layout remain because invalid
@@ -119,8 +140,8 @@ the version bundled with the training environment.
 
 `RLBackend.update_sensor()` and `update_graphical_sensor()` remain because the
 abstract `Backend` interface requires them. Goal marker creation and updates
-are used by active tasks. The unused `hide_goal_markers()` helper and stored
-marker paths were removed; their implementation remains in commit `41c46c6`.
+are used by active tasks. `hide_goal_markers()` is retained for future task
+control; the unused stored marker paths remain removed.
 
 ## Trim and training export review
 

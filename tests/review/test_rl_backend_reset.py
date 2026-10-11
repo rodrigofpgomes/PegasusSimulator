@@ -166,6 +166,18 @@ class RLBackendResetContract(unittest.TestCase):
         torch.testing.assert_close(reference[:, 3], torch.tensor([0.2, 0.3]))
         self.assertGreater(abs(reference[0, 2].item()), 0.0)
 
+    def test_hide_goal_markers_moves_only_selected_markers(self):
+        captured = {}
+        self.backend._goal_marker_view = SimpleNamespace(
+            set_world_poses=lambda **kwargs: captured.update(kwargs)
+        )
+
+        self.backend.hide_goal_markers(torch.tensor([1, 2]))
+
+        torch.testing.assert_close(captured["indices"], torch.tensor([1, 2]))
+        torch.testing.assert_close(captured["positions"][:, 2], torch.tensor([-100.0, -100.0]))
+        torch.testing.assert_close(captured["orientations"][:, 0], torch.ones(2))
+
 
 if __name__ == "__main__":
     unittest.main()

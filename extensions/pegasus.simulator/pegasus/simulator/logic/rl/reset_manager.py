@@ -201,18 +201,9 @@ class ResetManager:
             omega = (rotor_norm + 1.0) * 0.5 * (max_w - min_w).unsqueeze(0) + min_w.unsqueeze(0)
             
             vehicle._thrusters._velocity[env_ids] = omega
-            # Keep the policy's normalized rotor observation consistent with PhysX
-            if not hasattr(vehicle._thrusters, "_reset_rotor_norm"):
-                vehicle._thrusters._reset_rotor_norm = torch.zeros_like(vehicle._thrusters._velocity)
-            vehicle._thrusters._reset_rotor_norm[env_ids] = rotor_norm
-            # The first backend supplies the next motor command after reset
-            if hasattr(vehicle._thrusters, "sync_to_models"):
-                vehicle._thrusters.sync_to_models()
-            # Discard loads and surface angles retained by the previous episode
-            for name in ("_forces", "_torques", "_last_forces_local", "_last_torques_local", "_surface_deflections"):
-                buffer = getattr(vehicle, name, None)
-                if buffer is not None:
-                    buffer[env_ids] = 0.0
+            # The ShuttleGlider adapter stores the normalized reset value for action history
+            if hasattr(vehicle._thrusters, "_reset_rotor_norm"):
+                vehicle._thrusters._reset_rotor_norm[env_ids] = rotor_norm
 
         # Goals belong to the new episode and are updated after the physical reset
         if randomize_goals and self.goal_cfg is not None:

@@ -150,48 +150,62 @@ class RLBackend(Backend):
         self._input_reference = self.vehicle.force_and_torques_to_velocities(u_1, tau)
 
     def _attitude_inner_loop(self) -> tuple[torch.Tensor, torch.Tensor]:
-        """Compute body thrust and attitude moments from the requested local force."""
+        """Compute multirotor thrust and moments for a fixed-yaw attitude target.
+
+        The task supplies forces and moments in the body frame. The geometric
+        attitude construction uses world-frame force, while the output moment
+        and measured angular velocity remain in the body frame.
+        """
         body_index = self.vehicle.body_index
         body_force = self._forces[:, body_index, :]
-        attitude = self._state_cache[:, 6:10]
-        angular_velocity = self._state_cache[:, 10:13]
+        q = self._state_cache[:, 6:10]
+        w = self._state_cache[:, 10:13]
 
-        # Commands are stored in the /body frame; attitude control uses world axes
-        desired_force_world = quaternion_apply(attitude, body_force)
-        rotation = quaternion_to_matrix(attitude)
-        body_z_world = rotation[:, :, 2]
+        # Convert the requested local force to world axes before constructing the desired attitude
+        F_des = quaternion_apply(q, body_force)
+        R = quaternion_to_matrix(q)
 
-        # Only positive thrust along the current body Z can be produced
-        thrust = torch.sum(desired_force_world * body_z_world, dim=-1).clamp_min(0.0)
+        # Get the current body Z axis from the last column of the rotation matrix
+        Z_B = R[:, :, 2]
 
-        # Point desired body Z along the commanded world force. A zero force
-        # keeps the current direction and produces zero thrust.
-        force_norm = torch.linalg.vector_norm(desired_force_world, dim=-1, keepdim=True)
+        # Project the desired force onto body Z to obtain nonnegative collective thrust
+        u_1 = torch.sum(F_des * Z_B, dim=-1).clamp_min(0.0)
+
+        # Align the desired body Z axis with the force; retain the current axis for zero force
+        force_norm = torch.linalg.vector_norm(F_des, dim=-1, keepdim=True)
         active = force_norm.squeeze(-1) > 1e-6
-        desired_z = torch.where(
+        Z_b_des = torch.where(
             active.unsqueeze(-1),
-            desired_force_world / force_norm.clamp_min(1e-6),
-            body_z_world,
+            F_des / force_norm.clamp_min(1e-6),
+            Z_B,
         )
 
-        # Fixed world X sets the desired yaw; world Y handles parallel axes
-        world_x = torch.tensor([1.0, 0.0, 0.0], device=self._device).expand_as(desired_z)
-        world_y = torch.tensor([0.0, 1.0, 0.0], device=self._device).expand_as(desired_z)
-        desired_y = torch.cross(desired_z, world_x, dim=-1)
-        parallel = torch.linalg.vector_norm(desired_y, dim=-1, keepdim=True) < 1e-6
-        desired_y = torch.where(parallel, torch.cross(desired_z, world_y, dim=-1), desired_y)
-        desired_y = desired_y / torch.linalg.vector_norm(desired_y, dim=-1, keepdim=True)
-        desired_x = torch.cross(desired_y, desired_z, dim=-1)
-        desired_rotation = torch.stack((desired_x, desired_y, desired_z), dim=-1)
+        # Set desired yaw to zero, so the reference horizontal axis is world X
+        X_c_des = torch.tensor([1.0, 0.0, 0.0], device=self._device).expand_as(Z_b_des)
+        Y_c_des = torch.tensor([0.0, 1.0, 0.0], device=self._device).expand_as(Z_b_des)
 
-        # Combine requested body moments with attitude correction and rate damping
-        error_matrix = desired_rotation.transpose(1, 2) @ rotation - rotation.transpose(1, 2) @ desired_rotation
-        attitude_error = 0.5 * torch.stack(
-            (error_matrix[:, 2, 1], error_matrix[:, 0, 2], error_matrix[:, 1, 0]), dim=-1
+        # Construct desired body Y; use world Y if the force is parallel to world X
+        Y_b_des = torch.cross(Z_b_des, X_c_des, dim=-1)
+        parallel = torch.linalg.vector_norm(Y_b_des, dim=-1, keepdim=True) < 1e-6
+        Y_b_des = torch.where(parallel, torch.cross(Z_b_des, Y_c_des, dim=-1), Y_b_des)
+        Y_b_des = Y_b_des / torch.linalg.vector_norm(Y_b_des, dim=-1, keepdim=True)
+
+        # Complete the desired orthonormal attitude matrix
+        X_b_des = torch.cross(Y_b_des, Z_b_des, dim=-1)
+        R_des = torch.stack((X_b_des, Y_b_des, Z_b_des), dim=-1)
+
+        # Compute the geometric attitude error in body coordinates
+        e_R_mat = R_des.transpose(1, 2) @ R - R.transpose(1, 2) @ R_des
+        e_R = 0.5 * torch.stack(
+            (e_R_mat[:, 2, 1], e_R_mat[:, 0, 2], e_R_mat[:, 1, 0]), dim=-1
         )
-        moment = self._torques[:, body_index, :] - (attitude_error @ self._Kr.T) - (angular_velocity @ self._Kw.T)
 
-        return thrust, moment
+        # Desired body rate is zero; add the requested moment as a feedforward term
+        w_des = torch.zeros_like(w)
+        e_w = w - w_des
+        tau = self._torques[:, body_index, :] - (e_R @ self._Kr.T) - (e_w @ self._Kw.T)
+
+        return u_1, tau
 
     def update_state(self, state: StateBatch):
         """Caches the new physics state after a simulation step."""
@@ -300,6 +314,20 @@ class RLBackend(Backend):
         indices = env_ids.to(device=self._device, dtype=torch.long)
         
         orientations = torch.zeros((positions.shape[0], 4), device=self._device, dtype=torch.float32)
+        orientations[:, 0] = 1.0
+
+        self._goal_marker_view.set_world_poses(positions=positions, orientations=orientations, indices=indices)
+
+    def hide_goal_markers(self, env_ids: torch.Tensor):
+        """Move selected goal markers below the scene until they are needed again."""
+        if self._goal_marker_view is None:
+            return
+
+        indices = env_ids.to(device=self._device, dtype=torch.long)
+        positions = torch.zeros((indices.numel(), 3), device=self._device, dtype=torch.float32)
+        positions[:, 2] = -100.0
+
+        orientations = torch.zeros((indices.numel(), 4), device=self._device, dtype=torch.float32)
         orientations[:, 0] = 1.0
 
         self._goal_marker_view.set_world_poses(positions=positions, orientations=orientations, indices=indices)

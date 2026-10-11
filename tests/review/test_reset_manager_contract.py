@@ -49,6 +49,7 @@ class ResetManagerContract(unittest.TestCase):
             max_rotor_velocity=torch.tensor([100.0]),
             _velocity=torch.zeros((2, 1)),
             _input_reference=torch.full((2, 1), 17.0),
+            _reset_rotor_norm=torch.zeros((2, 1)),
         )
         vehicle = SimpleNamespace(
             n_vehicles=2,
@@ -72,6 +73,11 @@ class ResetManagerContract(unittest.TestCase):
         torch.testing.assert_close(thrusters._velocity[:, 0], torch.tensor([0.0, 75.0]))
         torch.testing.assert_close(thrusters._input_reference[:, 0], torch.tensor([17.0, 17.0]))
         torch.testing.assert_close(thrusters._reset_rotor_norm[1], torch.tensor([0.5]))
+
+        # Regular thrusters do not acquire a ShuttleGlider-only observation field
+        del thrusters._reset_rotor_norm
+        manager.reset_envs(torch.tensor([0]))
+        self.assertFalse(hasattr(thrusters, "_reset_rotor_norm"))
 
 
 if __name__ == "__main__":
