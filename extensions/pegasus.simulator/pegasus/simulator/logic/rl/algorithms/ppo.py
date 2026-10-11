@@ -11,13 +11,14 @@ import copy
 import torch.nn as nn
 
 from pegasus.simulator.logic.rl.skrl_pegasus_wrapper import PegasusSkrlWrapper
+from pegasus.simulator.logic.rl.training_export import train_and_export, snapshot_config
 
 
-def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True):
+def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True, checkpoint: str | None = None):
     """Initializes the PPO agent, sets up logging, and starts the training loop."""
     
     # Deferred imports to avoid early CUDA initialization conflicts with Isaac Sim
-    from skrl.agents.torch.ppo import PPO
+    from pegasus.simulator.logic.rl.algorithms.transition_contract import PegasusPPO as PPO
     from skrl.trainers.torch import SequentialTrainer
     from skrl.memories.torch import RandomMemory
     from skrl.utils import set_seed
@@ -36,7 +37,8 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     cfg = _prepare_cfg(agent_cfg["cfg"], device)
 
     # Inject observation size into preprocessor
-    cfg["state_preprocessor_kwargs"]["size"] = wrapped.observation_space
+    if cfg.get("state_preprocessor") is not None:
+        cfg["state_preprocessor_kwargs"]["size"] = wrapped.observation_space
 
     # Rollout memory (on-policy core)
     memory = RandomMemory(memory_size=cfg["rollouts"], num_envs=wrapped.num_envs, device=device)
@@ -45,14 +47,11 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     cfg["experiment"]["directory"] = log_dir
 
     # Agent Initialization
-    agent = PPO(
-        models=models,
-        memory=memory,
-        cfg=cfg,
-        observation_space=wrapped.observation_space,
-        action_space=wrapped.action_space,
-        device=device,
-    )
+    agent = PPO(models=models, memory=memory, cfg=cfg, observation_space=wrapped.observation_space, action_space=wrapped.action_space, device=device)
+
+    if checkpoint is not None:
+        agent.load(checkpoint)
+        print(f"[PPO] Loaded checkpoint from: {checkpoint}")
 
     # Save the custom config inside the folder skrl just created
     run_dir = agent.experiment_dir
@@ -67,7 +66,9 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     }
 
     # Start Training
-    SequentialTrainer(cfg=trainer_cfg, env=wrapped, agents=agent).train()
+    train_and_export(SequentialTrainer(cfg=trainer_cfg, env=wrapped, agents=agent), agent, run_dir,
+                     metadata={"algorithm": "ppo", "environment": snapshot_config(env.cfg), "task": agent_cfg.get("task"),
+                               "seed": seed, "revision": "aligned-com-review-v2", "resume_checkpoint": checkpoint})
 
     print(f"[PPO] Training completed. Logs saved to: {run_dir}")
 

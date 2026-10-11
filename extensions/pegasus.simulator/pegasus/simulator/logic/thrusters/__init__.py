@@ -1,5 +1,6 @@
 """
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
 """
 
@@ -7,3 +8,5 @@ from .thrust_curve import ThrustCurve
 from .quadratic_thrust_curve import QuadraticThrustCurve
 
 from .quadratic_thrust_curve_batch import QuadraticThrustCurveBatch
+
+from .glider_thrust_curve_batch import GliderThrustCurveBatch

@@ -1,6 +1,7 @@
 """
 | File: px4_mavlink_backend.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | Description: File that implements the Mavlink Backend for communication/control with/of the vehicle simulation
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
 """
@@ -437,14 +438,14 @@ class PX4MavlinkBackend(Backend):
             state (State): The current state of the vehicle.
         """
 
-        # Get the quaternion in the convention [x, y, z, w]
+        # Get the scalar-first quaternion [w, x, y, z]
         attitude = state.get_attitude_ned_frd()
 
-        # Rotate the quaternion to the mavlink standard
-        self._sensor_data.sim_attitude[0] = attitude[3]
-        self._sensor_data.sim_attitude[1] = attitude[0]
-        self._sensor_data.sim_attitude[2] = attitude[1]
-        self._sensor_data.sim_attitude[3] = attitude[2]
+        # State and MAVLink both use scalar-first quaternions
+        self._sensor_data.sim_attitude[0] = float(attitude[0])
+        self._sensor_data.sim_attitude[1] = float(attitude[1])
+        self._sensor_data.sim_attitude[2] = float(attitude[2])
+        self._sensor_data.sim_attitude[3] = float(attitude[3])
 
         # Get the angular velocity
         ang_vel = state.get_angular_velocity_frd()

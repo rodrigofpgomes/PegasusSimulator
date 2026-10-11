@@ -1,6 +1,7 @@
 """
 | File: quadratic_thrust_curve.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | Descriptio: File that implements a quadratic thrust curve for rotors
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
 """
@@ -21,7 +22,7 @@ class QuadraticThrustCurve(ThrustCurve):
 
             >>> {"num_rotors": 4,
             >>>  "rotor_constant": [5.84e-6, 5.84e-6, 5.84e-6, 5.84e-6],
-            >>>  "rolling_moment_coefficient": [1e-6, 1e-6, 1e-6, 1e-6],
+            >>>  "rolling_moment_coefficient": [3.504e-7, 3.504e-7, 3.504e-7, 3.504e-7], # 5.84e-06 * 0.06
             >>>  "rot_dir": [-1, -1, 1, 1],
             >>>  "min_rotor_velocity": [0, 0, 0, 0],                      # rad/s
             >>>  "max_rotor_velocity": [1100, 1100, 1100, 1100],          # rad/s
@@ -34,11 +35,11 @@ class QuadraticThrustCurve(ThrustCurve):
         self._num_rotors = config.get("num_rotors", 4)
 
         # The rotor constant used for computing the total thrust produced by the rotor: T = rotor_constant * omega^2
-        self._rotor_constant = torch.tensor(config.get("rotor_constant", [8.54858e-6, 8.54858e-6, 8.54858e-6, 8.54858e-6]), dtype=torch.float32, device=self.device)
+        self._rotor_constant = torch.tensor(config.get("rotor_constant", [5.84e-6, 5.84e-6, 5.84e-6, 5.84e-6]), dtype=torch.float32, device=self.device)
         assert len(self._rotor_constant) == self._num_rotors
 
         # The rotor constant used for computing the total torque generated about the vehicle Z-axis
-        self._rolling_moment_coefficient = torch.tensor(config.get("rolling_moment_coefficient", [1e-6, 1e-6, 1e-6, 1e-6]), dtype=torch.float32, device=self.device)
+        self._rolling_moment_coefficient = torch.tensor(config.get("rolling_moment_coefficient", [3.504e-7, 3.504e-7, 3.504e-7, 3.504e-7]), dtype=torch.float32, device=self.device)
         assert len(self._rolling_moment_coefficient) == self._num_rotors
 
         # Save the rotor direction of rotation

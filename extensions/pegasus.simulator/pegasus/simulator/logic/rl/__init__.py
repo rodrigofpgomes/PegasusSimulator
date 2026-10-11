@@ -4,7 +4,7 @@
 """
 from .base_env import PegasusEnv, PegasusEnvCfg
 from .rl_backend import RLBackend
-from .reset_manager import ResetManager
+from .reset_manager import ResetManager, GoalCfg, InitStateCfg
 
 
-__all__ = ["PegasusEnv", "PegasusEnvCfg", "RLBackend", "ResetManager"]
+__all__ = ["PegasusEnv", "PegasusEnvCfg", "RLBackend", "ResetManager", "GoalCfg", "InitStateCfg"]

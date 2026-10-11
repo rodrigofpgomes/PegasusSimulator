@@ -1,6 +1,7 @@
 """
 | File: multirotor.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2024, Marcelo Jacinto. All rights reserved.
 | Description: Definition of the Multirotor class which is used as the base for all the multirotor vehicles.
 """
@@ -69,7 +70,7 @@ class Multirotor(Vehicle):
         vehicle_id: int = 0,
         # Spawning pose of the vehicle
         init_pos=[0.0, 0.0, 0.07],
-        init_orientation=[1.0, 0.0, 0.0, 0.0],
+        init_orientation=[0.0, 0.0, 0.0, 1.0],
         config=MultirotorConfig(),
     ):
         """Initializes the multirotor object
@@ -79,7 +80,7 @@ class Multirotor(Vehicle):
             usd_file (str): The USD file that describes the looks and shape of the vehicle. Defaults to "".
             vehicle_id (int): The id to be used for the vehicle. Defaults to 0.
             init_pos (list): The initial position of the vehicle in the inertial frame (in ENU convention). Defaults to [0.0, 0.0, 0.07].
-            init_orientation (list): The initial orientation of the vehicle in quaternion [qw, qx, qy, qz]. Defaults to [1.0, 0.0, 0.0, 0.0].
+            init_orientation (list): The initial orientation of the vehicle in quaternion [qx, qy, qz, qw]. Defaults to [0.0, 0.0, 0.0, 1.0].
             config (MultirotorConfig, optional): Defaults to MultirotorConfig().
         """
 

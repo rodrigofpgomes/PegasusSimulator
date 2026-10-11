@@ -93,13 +93,13 @@ class StateBatch:
             torch.Tensor: A torch tensor with (n_vehicles, 3) shape with [u, v, w] that defines the velocity of the vehicle expressed in the FRD body frame.
         """
 
-        # Get the linear acceleration in FLU convention
+        # Get the linear velocity in FLU convention
         R_body_flu = quaternion_to_matrix(self.attitude)     # (n_vehicles, 3, 3)
 
-        linear_acc_body_flu = torch.bmm(R_body_flu.transpose(1,2), self.linear_acceleration.unsqueeze(-1)).squeeze(-1)  # (n_vehicles,3)
+        linear_vel_body_flu = torch.bmm(R_body_flu.transpose(1,2), self.linear_velocity.unsqueeze(-1)).squeeze(-1)  # (n_vehicles,3)
 
-        # Convert the linear acceleration in the body frame expressed in FLU convention to the FRD convention
-        return (rot_FLU_to_FRD(device=self.device, dtype=torch.float32) @ linear_acc_body_flu.T).T    # (n_vehicles, 3)
+        # Convert the linear velocity in the body frame expressed in FLU convention to the FRD convention
+        return (rot_FLU_to_FRD(device=self.device, dtype=torch.float32) @ linear_vel_body_flu.T).T    # (n_vehicles, 3)
 
 
     def get_linear_velocity_ned(self):
