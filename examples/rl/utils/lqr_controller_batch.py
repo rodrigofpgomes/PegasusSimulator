@@ -23,7 +23,7 @@ class LQRBackendCfg():
     """Configuration for the Quadcopter Environment."""
 
     # Vehicle Params
-    angular_damping: float = 0.5
+    angular_damping: float = 2.0 #0.5
     drone_mass: float = 1.5 
     gravity: float = 9.81 
 
@@ -80,6 +80,8 @@ class LQRBackend(Backend):
         self._n_vehicles = self.vehicle.n_vehicles
         self._parts_per_vehicle = self.vehicle.parts_per_vehicle
         self._device = self.vehicle.device
+        masses = self.vehicle._vehicle_prims.get_masses()
+        self.cfg.drone_mass = float(torch.as_tensor(masses).reshape(self._n_vehicles, -1)[0].sum())
 
         self._P = self._P.to(device=self._device, dtype=torch.float32)
         self._K = self._K.to(device=self._device, dtype=torch.float32)
@@ -121,7 +123,7 @@ class LQRBackend(Backend):
         
         ep = self.reset_manager.goal_pos - pos
 
-        ev = -vel
+        ev = self.reset_manager.goal_vel - vel
 
         x = torch.cat([ep, ev], dim=1)
 
@@ -133,7 +135,7 @@ class LQRBackend(Backend):
             device=self._device,
         ).unsqueeze(0)
 
-        F_des = self.cfg.drone_mass * u_lqr + g_force
+        F_des = self.cfg.drone_mass * (u_lqr + self.reset_manager.goal_acc) + g_force
 
         self._forces[:, self._vehicle.body_index, :] = quaternion_apply(quaternion_invert(quat), F_des)
         self._torques[:, self._vehicle.body_index, :] = - self.cfg.angular_damping * ang_vel_b
@@ -141,7 +143,7 @@ class LQRBackend(Backend):
         if self._action_mode == "rotor_velocity":
             if self._inner_loop:
                 # Get the desired forces
-                F_des = self._forces[:, 0, :]
+                # F_des remains in world coordinates for geometric attitude control.
 
                 # Get the current state
                 q = self._state_cache[:, 6:10]
@@ -155,7 +157,7 @@ class LQRBackend(Backend):
                 u_1 = torch.sum(F_des * Z_B, dim=1)
 
                 # Compute the desired body-frame axis Z_b
-                Z_b_des = F_des / torch.linalg.norm(F_des, dim=1, keepdim=True)
+                Z_b_des = F_des / torch.linalg.norm(F_des, dim=1, keepdim=True).clamp_min(1e-6)
 
                 # Desired yaw (fixed to zero)
                 yaw_ref = torch.zeros((self._n_vehicles,), dtype=torch.float32, device=self._device)
@@ -165,7 +167,7 @@ class LQRBackend(Backend):
 
                 # Compute Y_b_des
                 Z_b_cross_X_c = torch.cross(Z_b_des, X_c_des, dim=1)
-                Y_b_des = Z_b_cross_X_c / torch.linalg.norm(Z_b_cross_X_c, dim=1, keepdim=True)
+                Y_b_des = Z_b_cross_X_c / torch.linalg.norm(Z_b_cross_X_c, dim=1, keepdim=True).clamp_min(1e-6)
 
                 # Compute X_b_des
                 X_b_des = torch.cross(Y_b_des, Z_b_des, dim=1)
@@ -187,8 +189,8 @@ class LQRBackend(Backend):
                 tau = -(e_R @ self._Kr.T) - (e_w @ self._Kw.T)
             else:
                 # Direct force and torque bypass
-                u_1 = self._forces[:, 0, 2]
-                tau = self._torques[:, 0, :]
+                u_1 = self._forces[:, self._vehicle.body_index, 2]
+                tau = self._torques[:, self._vehicle.body_index, :]
 
             # Convert forces/torques to rotor angular velocities
             self._input_ref = self.vehicle.force_and_torques_to_velocities(u_1, tau)

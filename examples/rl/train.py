@@ -22,34 +22,51 @@ from isaacsim import SimulationApp
 TASKS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "tasks")
 
 def discover_tasks():
-    """Finds available tasks in the tasks directory."""
+    """Finds available tasks under the tasks directory.
+
+    Walks the tree recursively and returns every directory that contains a
+    ``*_env.py`` file, as a path relative to ``TASKS_DIR`` using ``/`` as the
+    separator (e.g. ``"double_integrator/01_isaac_lab"`` or ``"raptor_pretrain"``).
+    This supports the nested task layout and numeric-prefixed package names.
+    """
     if not os.path.isdir(TASKS_DIR):
         return []
-    return sorted(d for d in os.listdir(TASKS_DIR) if os.path.isdir(os.path.join(TASKS_DIR, d)) and not d.startswith("_"))
+    tasks = []
+    
+    for root, dirs, files in os.walk(TASKS_DIR):
+        # Skip private/cache directories
+        dirs[:] = [d for d in dirs if not d.startswith("_") and d != "agents"]
+        if any(f.endswith("_env.py") for f in files):
+            rel = os.path.relpath(root, TASKS_DIR)
+            tasks.append(rel.replace(os.sep, "/"))
+            
+    return sorted(tasks)
 
 def discover_algos():
     """Finds available algorithms dynamically."""
     repo_root = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", ".."))
     algo_dir = os.path.join(repo_root, "extensions", "pegasus.simulator", "pegasus", "simulator", "logic", "rl", "algorithms")
-    if not os.path.isdir(algo_dir):
-        return ["ppo"]
-
+    
     algos = []
     for f in os.listdir(algo_dir):
         if not f.endswith(".py") or f.startswith("_"):
             continue
         algos.append(f[:-3])
 
-    return sorted(algos) or ["ppo"]
+    return sorted(algos)
 
 
 def parse_args():
     """Parses command line arguments for training."""
-    tasks = discover_tasks() or ["quadcopter"]
-    algos = discover_algos() or ["ppo"]
+    tasks = discover_tasks()
+    algos = discover_algos()
     p = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     p.add_argument("--task",    required=True, choices=tasks)
     p.add_argument("--algo",    default="ppo", choices=algos)
+    p.add_argument("--smoke-test", action="store_true")
+    p.add_argument("--timesteps", type=int)
+    p.add_argument("--log-dir", type=str, default=None)
+    p.add_argument("--checkpoint", type=str, default=None, help="Path to agent checkpoint to resume training")
     p.add_argument("--preset",  default="isaac_lab")
     p.add_argument("--n_envs",  type=int,   default=4096)
     p.add_argument("--seed",    type=int,   default=42)
@@ -73,8 +90,9 @@ from pxr import PhysxSchema
 
 from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
 from pegasus.simulator.logic.vehicles.multirotor_batch import MultirotorBatch, MultirotorBatchConfig
+from pegasus.simulator.logic.vehicles.shuttle_glider_batch2 import ShuttleGliderBatch2, ShuttleGliderBatchConfig2
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
-from pegasus.simulator.logic.rl import RLBackend, ResetManager
+from pegasus.simulator.logic.rl import RLBackend, ResetManager, GoalCfg, InitStateCfg
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -82,7 +100,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 def load_env(task: str):
     """Loads the target environment and configuration dynamically from *_env.py."""
 
-    task_dir = os.path.join(TASKS_DIR, task)
+    task_dir = os.path.join(TASKS_DIR, *task.split("/"))
 
     # Find *_env.py file
     env_files = [f for f in os.listdir(task_dir) if f.endswith("_env.py")]
@@ -90,8 +108,11 @@ def load_env(task: str):
     env_file = env_files[0]
     module_name = env_file[:-3]  # remove .py
 
-    # Import dynamically
-    mod = importlib.import_module(f"tasks.{task}.{module_name}")
+    # Import dynamically. The task id may contain numeric-prefixed package names
+    # (e.g. "double_integrator/01_isaac_lab"), which are not valid as an `import`
+    # statement but work through importlib.import_module with the dotted string.
+    task_pkg = task.replace("/", ".")
+    mod = importlib.import_module(f"tasks.{task_pkg}.{module_name}")
 
     # Infer class name (CamelCase + Env)
     base_name = module_name.replace("_env", "")
@@ -107,7 +128,8 @@ def load_env(task: str):
 
 def load_agent_cfg(task: str, algo: str, preset: str) -> dict:
     """Loads the agent configuration for the given preset."""
-    PRESETS = getattr(importlib.import_module(f"tasks.{task}.agents.{algo}_cfg"), "PRESETS")
+    task_pkg = task.replace("/", ".")
+    PRESETS = getattr(importlib.import_module(f"tasks.{task_pkg}.agents.{algo}_cfg"), "PRESETS")
     if preset not in PRESETS:
         raise KeyError(f"Preset '{preset}' not found.")
     return PRESETS[preset]
@@ -125,6 +147,9 @@ def main():
     if args.seed is not None:
         agent_cfg["seed"] = args.seed
 
+    agent_cfg["task"] = args.task
+    if args.timesteps is not None:
+        agent_cfg["timesteps"] = args.timesteps
     device = args.device
     n_envs = args.n_envs
 
@@ -139,6 +164,9 @@ def main():
     print(f"  Num envs:  {n_envs}")
     print(f"  Headless:  {args.headless}")
     print("="*60 + "\n")
+
+    from skrl.utils import set_seed
+    set_seed(agent_cfg["seed"])  # Seed before environment setup and curriculum sampling.
 
     # Initialize Simulator
     pg = PegasusInterface()
@@ -157,12 +185,23 @@ def main():
         api.CreateGpuFoundLostAggregatePairsCapacityAttr().Set(513141)
 
     # Setup Vehicles
-    backend = RLBackend(n_vehicles=n_envs, action_mode="direct_force")
-    vehicle_cfg = MultirotorBatchConfig(n_vehicles=n_envs)
+    backend = RLBackend(n_vehicles=n_envs, action_mode=env_cfg.action_mode, device=device)
+    physics_cfg = getattr(env_cfg, "vehicle_physics_cfg", None) or {}
+    
+    if env_cfg.vehicle == "Shuttle_glider2":
+        vehicle_cfg = ShuttleGliderBatchConfig2(cfg=physics_cfg, n_vehicles=n_envs)
+        VehicleClass = ShuttleGliderBatch2
+    else:
+        vehicle_cfg = MultirotorBatchConfig(
+            cfg=physics_cfg,
+            n_vehicles=n_envs,
+        )
+        VehicleClass = MultirotorBatch
+    
     vehicle_cfg.backends = [backend]
 
-    MultirotorBatch(
-        stage_prefix="/World/quadrotor", usd_file=ROBOTS["Iris"],
+    VehicleClass(
+        stage_prefix="/World/quadrotor", usd_file=ROBOTS[env_cfg.vehicle],
         vehicle_batch_id=1, n_vehicles=n_envs, spacing=2.5,
         config=vehicle_cfg,
     )
@@ -176,16 +215,40 @@ def main():
     timeline.play()
     world.step(render=not args.headless)
 
-    env.reset_manager = ResetManager(vehicles=[backend._vehicle], device=device)
+    goal_cfg = GoalCfg(goal_pos_xy_range=env_cfg.goal_pos_xy_range, goal_pos_z_range=env_cfg.goal_pos_z_range)
+    init_state_cfg = getattr(env_cfg, "init_state_cfg", None) if getattr(env_cfg, "randomize_init_state", False) else None
+
+    env.reset_manager = ResetManager(vehicles=[backend._vehicle], device=device, goal_cfg=goal_cfg, init_state_cfg=init_state_cfg)
     env.setup()
+    env._render_enabled = not args.headless
+
+    if args.smoke_test:
+        obs, _ = env.reset()
+        assert obs["policy"].shape == (n_envs, env_cfg.observation_space)
+        for _ in range(8):
+            obs, reward, terminated, truncated, info = env.step(torch.zeros((n_envs, env_cfg.action_space), device=device))
+            assert obs["policy"].shape == (n_envs, env_cfg.observation_space)
+            assert torch.isfinite(obs["policy"]).all() and torch.isfinite(reward).all()
+        before_pos = backend._vehicle.state.position.clone()
+        before_vel = backend._vehicle.state.linear_velocity.clone()
+        env._reset_idx(torch.tensor([0], device=device))
+        if n_envs > 1:
+            assert torch.equal(before_pos[1:], backend._vehicle.state.position[1:])
+            assert torch.equal(before_vel[1:], backend._vehicle.state.linear_velocity[1:])
+        print("SMOKE PASSED: creation, 8 steps, observation contract, finite reward, partial-reset isolation")
+        backend._vehicle.close()
+        timeline.stop()
+        return
 
     # Run Training
-    log_dir = os.path.join(TASKS_DIR, args.task, "logs")
-    train_fn(env=env, agent_cfg=agent_cfg, log_dir=log_dir, device=device, headless=args.headless)
+    log_dir = args.log_dir or os.path.join(TASKS_DIR, *args.task.split("/"), "logs")
+    train_fn(env=env, agent_cfg=agent_cfg, log_dir=log_dir, device=device, headless=args.headless, checkpoint=args.checkpoint)
 
     # Cleanup
     timeline.stop()
-    simulation_app.close()
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    finally:
+        simulation_app.close()

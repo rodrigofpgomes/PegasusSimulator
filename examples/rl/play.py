@@ -87,14 +87,7 @@ def make_reference_provider(reset_manager, n_envs: int):
                 "velocity": np.full((n_envs, 3), np.nan, dtype=np.float32),
             }
 
-        if hasattr(reset_manager, "goal_pos"):
-            ref_pos = reset_manager.goal_pos
-        elif hasattr(reset_manager, "_goal_pos"):
-            ref_pos = reset_manager._goal_pos
-        else:
-            ref_pos = None
-
-        ref_pos = _to_np_ref(ref_pos, n_envs)
+        ref_pos = _to_np_ref(reset_manager.goal_pos, n_envs)
         ref_vel = np.zeros((n_envs, 3), dtype=np.float32)
 
         return {
@@ -196,20 +189,12 @@ class EpisodeTrajectoryRecorder:
         if self.reset_manager is None:
             return np.full((self.n_envs, 3), np.nan, dtype=np.float32)
 
-        goal_pos = getattr(self.reset_manager, "goal_pos", None)
-        if goal_pos is None:
-            return np.full((self.n_envs, 3), np.nan, dtype=np.float32)
-
-        return goal_pos.detach().cpu().numpy()
+        return self.reset_manager.goal_pos.detach().cpu().numpy()
 
     def _get_body_force_torque_numpy(self, vehicle):
-        body_index = getattr(vehicle, "body_index", None)
-
-        if body_index is None:
-            body_index = 0
-
-        last_forces = getattr(vehicle, "_last_forces_local", None)
-        last_torques = getattr(vehicle, "_last_torques_local", None)
+        body_index = vehicle.body_index
+        last_forces = vehicle._last_forces_local
+        last_torques = vehicle._last_torques_local
 
         if last_forces is None:
             body_force = np.full((self.n_envs, 3), np.nan, dtype=np.float32)
@@ -349,13 +334,18 @@ from isaacsim import SimulationApp
 
 
 def discover_tasks():
+    """Recursively finds tasks (dirs containing a ``*_env.py``) and returns their
+    paths relative to TASKS_DIR using ``/`` (e.g. ``double_integrator/01_isaac_lab``)."""
     if not TASKS_DIR.is_dir():
         return []
 
-    return sorted(
-        d.name for d in TASKS_DIR.iterdir()
-        if d.is_dir() and not d.name.startswith("_")
-    )
+    tasks = []
+    for root, dirs, files in os.walk(TASKS_DIR):
+        dirs[:] = [d for d in dirs if not d.startswith("_") and d != "agents"]
+        if any(f.endswith("_env.py") for f in files):
+            rel = os.path.relpath(root, TASKS_DIR)
+            tasks.append(rel.replace(os.sep, "/"))
+    return sorted(tasks)
 
 
 def parse_args():
@@ -400,7 +390,7 @@ from pegasus.simulator.logic.rl import RLBackend, ResetManager
 
 
 def load_env(task):
-    task_dir = TASKS_DIR / task
+    task_dir = TASKS_DIR.joinpath(*task.split("/"))
 
     env_files = [f for f in os.listdir(task_dir) if f.endswith("_env.py")]
     if not env_files:
@@ -409,7 +399,10 @@ def load_env(task):
     env_file = env_files[0]
     module_name = env_file[:-3]
 
-    mod = importlib.import_module(f"tasks.{task}.{module_name}")
+    # Numeric-prefixed nested packages (e.g. "double_integrator/01_isaac_lab")
+    # are imported via importlib using the dotted string form.
+    task_pkg = task.replace("/", ".")
+    mod = importlib.import_module(f"tasks.{task_pkg}.{module_name}")
 
     base_name = module_name.replace("_env", "")
     cls_name = "".join(w.capitalize() for w in base_name.split("_")) + "Env"
@@ -424,7 +417,8 @@ def load_env(task):
 
 
 def load_agent_cfg(task, algo, preset):
-    mod = importlib.import_module(f"tasks.{task}.agents.{algo}_cfg")
+    task_pkg = task.replace("/", ".")
+    mod = importlib.import_module(f"tasks.{task_pkg}.agents.{algo}_cfg")
     return getattr(mod, "PRESETS")[preset]
 
 
@@ -513,8 +507,9 @@ def main():
     # -----------------------------------------------------------------
     # RL vehicle
     # -----------------------------------------------------------------
-    rl_backend = RLBackend(n_vehicles=n_envs, action_mode="direct_force")
+    rl_backend = RLBackend(n_vehicles=n_envs, action_mode=env_cfg.action_mode)
 
+    physics_cfg = getattr(env_cfg, "vehicle_physics_cfg", None) or {}
     vehicle_cfg = MultirotorBatchConfig(n_vehicles=n_envs)
     vehicle_cfg.backends = [rl_backend]
 
@@ -526,6 +521,7 @@ def main():
         spacing=2.5,
         config=vehicle_cfg,
     )
+    rl_vehicle.disable_collisions()
 
     env = EnvClass(env_cfg, rl_backend, reset_manager=None)
     env._world = world
@@ -648,11 +644,15 @@ def main():
                 recorder.sample()
 
             with torch.no_grad():
-                actions, _, _ = agent.act(obs, timestep=0, timesteps=0)
+                # skrl's act() returns a STOCHASTIC sample from the policy
+                # distribution (even after set_running_mode("eval")). For
+                # deterministic evaluation we use the distribution mean from
+                # outputs["mean_actions"] instead of the sampled action.
+                _sampled, _, _outputs = agent.act(obs, timestep=0, timesteps=0)
+                actions = _outputs.get("mean_actions", _sampled)
 
             obs, _, terminated, truncated, _ = wrapped.step(actions)
 
-            # Keep this if your env/wrapper does not render/step the world internally.
             world.step(render=not args.headless)
 
             if recorder is not None:
