@@ -3,6 +3,19 @@
 | Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
 | Description: RSL-RL-like PPO training using the skrl infrastructure.
+|
+| Relative to skrl 1.4.3 PPO (skrl/agents/torch/ppo/ppo.py):
+|   - PegasusPPO replaces autoreset observations with physical terminal states
+|     and bootstraps timeouts from the terminal value (transition_contract.py).
+|   - PPO2._update keeps skrl's GAE, PPO ratio objective and optimizer interface,
+|     but reuses one random minibatch permutation across all learning epochs.
+|   - It measures analytical Gaussian KL against the policy before the update
+|     and adjusts the optimizer learning rate within the minibatch loop.
+|   - Its optional clipped critic loss takes the larger of the unclipped and
+|     clipped squared errors. skrl clips the predicted value before one MSE.
+|   - The training entry point also accepts a teacher actor checkpoint.
+|
+| Baseline: https://github.com/Toni-SM/skrl/blob/6054599/skrl/agents/torch/ppo/ppo.py
 """
 
 import os
@@ -18,7 +31,7 @@ from pegasus.simulator.logic.rl.training_export import train_and_export, snapsho
 
 
 def _assert_finite(name, tensor):
-    """Stop training if a tensor contains NaN or Inf."""
+    """Report the first invalid tensor entries before an optimizer update."""
     if not isinstance(tensor, torch.Tensor):
         return
 
@@ -35,11 +48,13 @@ def _assert_finite(name, tensor):
 # =============================================================================
 
 class PPO2(PPO):
-    """PPO agent with an RSL-RL-style update and Pegasus terminal handling."""
+    """Use skrl's PPO storage and interaction cycle with a custom update."""
 
     def __init__(self, *args, **kwargs):
+        """Read the KL schedule and critic-loss options from the agent config."""
         super().__init__(*args, **kwargs)
 
+        # These settings drive the analytical KL schedule inside _update
         self._desired_kl = self.cfg.get("desired_kl", 0.01)
         self._schedule = self.cfg.get("schedule", "adaptive")
         self._use_clipped_value_loss = self.cfg.get("use_clipped_value_loss", True)
@@ -56,7 +71,8 @@ class PPO2(PPO):
         """Estimate advantages, then optimize policy and value minibatches.
 
         The update uses one rollout permutation across learning epochs,
-        analytical Gaussian KL and an optional adaptive learning rate.
+        analytical Gaussian KL and an optional adaptive learning rate. The
+        inherited PegasusPPO.record_transition has already corrected resets.
         """
 
         # ---------------------------------------------------------------------
@@ -64,10 +80,12 @@ class PPO2(PPO):
         # ---------------------------------------------------------------------
 
         def compute_gae(rewards, dones, values, last_values):
+            """Calculate rollout returns and normalized advantages backwards."""
             advantage = 0
             advantages = torch.zeros_like(rewards)
             not_dones = dones.logical_not()
 
+            # A completed episode stops both value propagation and GAE recursion
             for i in reversed(range(rewards.shape[0])):
                 next_values = values[i + 1] if i < rewards.shape[0] - 1 else last_values
                 delta = rewards[i] + self._discount_factor * not_dones[i] * next_values - values[i]
@@ -84,6 +102,7 @@ class PPO2(PPO):
         # Final state value
         # ---------------------------------------------------------------------
 
+        # Bootstrap an unfinished rollout from its last physical next state
         with torch.no_grad(), torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
             self.value.train(False)
             last_values, _, _ = self.value.act({"states": self._state_preprocessor(self._current_next_states.float())}, role="value")
@@ -105,6 +124,7 @@ class PPO2(PPO):
         _assert_finite("returns", returns)
         _assert_finite("advantages", advantages)
 
+        # Store critic targets in the same scale used by the value network
         processed_values = self._value_preprocessor(values, train=True)
         processed_returns = self._value_preprocessor(returns, train=True)
 
@@ -120,6 +140,7 @@ class PPO2(PPO):
         # Flatten rollout
         # ---------------------------------------------------------------------
 
+        # Flatten time and vehicle axes into one pool of rollout samples
         states = self.memory.get_tensor_by_name("states", keepdim=False)
         actions = self.memory.get_tensor_by_name("actions", keepdim=False)
         old_log_prob = self.memory.get_tensor_by_name("log_prob", keepdim=False)
@@ -140,6 +161,7 @@ class PPO2(PPO):
         # Old policy distribution
         # ---------------------------------------------------------------------
 
+        # Freeze the old Gaussian parameters once for analytical KL comparisons
         with torch.no_grad():
             old_states = self._state_preprocessor(states, train=False)
             old_mu, old_sigma = self.policy.get_distribution_params(old_states)
@@ -164,7 +186,7 @@ class PPO2(PPO):
         mini_batch_size = batch_size // self._mini_batches
         usable_size = mini_batch_size * self._mini_batches
 
-        # RSL-RL generates one permutation per PPO update and reuses it for every learning epoch.
+        # Reuse one permutation across epochs; samples beyond usable_size are skipped
         indices = torch.randperm(usable_size, requires_grad=False, device=self.device)
 
         # ---------------------------------------------------------------------
@@ -197,6 +219,8 @@ class PPO2(PPO):
                 sampled_old_mu = old_mu[batch_idx]
                 sampled_old_sigma = old_sigma[batch_idx]
 
+                # Values and log probabilities refer to the rollout policy;
+                # the forward pass below evaluates the current policy.
                 # -------------------------------------------------------------
                 # Policy forward pass
                 # -------------------------------------------------------------
@@ -213,6 +237,7 @@ class PPO2(PPO):
                     if (sigma <= 0).any():
                         raise FloatingPointError(f"[PPO2] Sigma has negative values: min={sigma.min().item():.6e}, max={sigma.max().item():.6e}")
 
+                    # Sum action dimensions before averaging the batch entropy
                     entropy = distribution.entropy().sum(dim=-1).mean()
 
                     # ---------------------------------------------------------
@@ -220,6 +245,7 @@ class PPO2(PPO):
                     # ---------------------------------------------------------
 
                     with torch.no_grad():
+                        # KL(old Gaussian || current Gaussian), one value per sample
                         kl = torch.sum(torch.log(sigma / sampled_old_sigma + 1.0e-5) + (sampled_old_sigma.square() + (sampled_old_mu - mu).square()) / (2.0 * sigma.square()) - 0.5, dim=-1)
                         kl_mean = kl.mean()
 
@@ -235,6 +261,7 @@ class PPO2(PPO):
                         # RSL-RL adaptive learning rate
                         # -----------------------------------------------------
 
+                        # Adjust the optimizer directly, without skrl's scheduler
                         if self._desired_kl is not None and self._schedule == "adaptive":
                             if kl_mean > self._desired_kl * 2.0:
                                 self._learning_rate = max(self._min_learning_rate, self._learning_rate / self._learning_rate_factor)
@@ -250,6 +277,7 @@ class PPO2(PPO):
 
                     _assert_finite("next_log_prob", next_log_prob)
 
+                    # PPO's clipped probability ratio limits the policy update
                     ratio = torch.exp(next_log_prob - sampled_old_log_prob)
 
                     _assert_finite("ratio", ratio)  
@@ -269,6 +297,7 @@ class PPO2(PPO):
                     # ---------------------------------------------------------
 
                     if self._use_clipped_value_loss:
+                        # RSL-RL-style loss penalizes the worse of both estimates
                         value_clipped = sampled_old_values + (predicted_values - sampled_old_values).clamp(-self._ratio_clip, self._ratio_clip)
                         value_losses = (predicted_values - sampled_returns).pow(2)
                         value_losses_clipped = (value_clipped - sampled_returns).pow(2)
@@ -295,6 +324,7 @@ class PPO2(PPO):
                 self.optimizer.zero_grad()
                 self.scaler.scale(loss).backward()
 
+                # Match skrl's distributed gradient reduction and optional clipping
                 if config.torch.is_distributed:
                     self.policy.reduce_parameters()
                     if self.policy is not self.value:
@@ -325,6 +355,7 @@ class PPO2(PPO):
         # Tracking
         # ---------------------------------------------------------------------
 
+        # Average each metric over the minibatch optimizer steps just performed
         self.track_data("Loss / Policy loss", cumulative_policy_loss / num_updates)
         self.track_data("Loss / Value loss", cumulative_value_loss / num_updates)
         self.track_data("Policy / Mean outside action bounds", cumulative_mean_outside / num_updates)
@@ -348,7 +379,11 @@ class PPO2(PPO):
 # =============================================================================
 
 def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True, checkpoint: str | None = None):
-    """Build and train PPO2, optionally restoring a full or teacher actor checkpoint."""
+    """Build PPO2, restore an optional checkpoint and launch skrl training.
+
+    A teacher checkpoint initializes only the actor network and exploration
+    standard deviation. A regular skrl checkpoint restores the whole agent.
+    """
 
     # Defer trainer and memory imports until after the launcher initializes Isaac Sim
     from skrl.memories.torch import RandomMemory
@@ -419,7 +454,7 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
 # =============================================================================
 
 def _prepare_cfg(cfg: dict, device: str) -> dict:
-    """Deep-copies the PPO2 configuration and sets preprocessor devices if required."""
+    """Copy the task config and place state/value preprocessors on the agent device."""
     cfg = copy.deepcopy(cfg)
     for key in ("state_preprocessor_kwargs", "value_preprocessor_kwargs"):
         if isinstance(cfg.get(key), dict):
@@ -428,7 +463,7 @@ def _prepare_cfg(cfg: dict, device: str) -> dict:
 
 
 def _save_run_info(run_dir: str, cfg: dict, models: dict, agent_cfg: dict):
-    """Saves hyperparameters and model architecture for reproducibility."""
+    """Write effective hyperparameters and model descriptions for this run."""
 
     def _ser(value):
         if isinstance(value, type):

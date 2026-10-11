@@ -3,6 +3,19 @@
 | Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
 | Description: SAC training via skrl - generic and task-agnostic.
+|
+| Relative to skrl 1.4.3 SAC (skrl/agents/torch/sac/sac.py):
+|   - The agent stores the physical final observation from Pegasus autoreset
+|     transitions instead of the next episode's reset observation.
+|   - bootstrap_timeouts can continue the target through truncated episodes;
+|     true terminations always stop bootstrapping.
+|   - policy_delay updates the actor and entropy coefficient every configured
+|     number of critic steps, while critics still update on every step.
+|   - Optional weight decay is added to the existing actor/critic optimizers.
+|   - Target critics, mixed precision, gradient clipping and skrl logging
+|     remain part of the copied update path.
+|
+| Baseline: https://github.com/Toni-SM/skrl/tree/6054599/skrl/agents/torch/sac
 """
 
 import os
@@ -20,7 +33,7 @@ from pegasus.simulator.logic.rl.training_export import train_and_export, snapsho
 
 
 def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True, checkpoint: str | None = None):
-    """Train SAC with Pegasus terminal states and optional delayed actor updates."""
+    """Create replay memory and a Pegasus SAC agent, then start skrl training."""
 
     # Defer trainer, memory and agent imports until after Isaac Sim initializes
     from skrl.agents.torch.sac import SAC
@@ -45,13 +58,13 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     if cfg.get("state_preprocessor") is not None:
         cfg["state_preprocessor_kwargs"]["size"] = wrapped.observation_space
 
-    # Replay memory (off-policy core)
+    # Store transitions across episodes for off-policy gradient updates
     memory = RandomMemory(memory_size=agent_cfg["memory_size"], num_envs=wrapped.num_envs, device=device)
 
     # Set the base directory for skrl (it will create the timestamped folder inside this)
     cfg["experiment"]["directory"] = log_dir
 
-    # Use one transition contract for every actor delay, including one
+    # Keep the terminal-state and timeout contract when actor delay is one
     policy_delay = cfg.pop("policy_delay", 1)
     AgentClass = _make_sac_with_delay(SAC, policy_delay)
 
@@ -95,48 +108,54 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
 # -------------------------------------------
 
 def _make_sac_with_delay(BaseSAC, policy_delay: int):
-    """Return SAC with terminal-state replay and configurable actor frequency."""
+    """Extend skrl SAC with terminal-state replay and delayed actor updates.
+
+    The class is created for each training run because the selected delay is
+    part of that run's configuration. A delay of one still uses the Pegasus
+    terminal-state and timeout behavior.
+    """
 
     if isinstance(policy_delay, bool) or not isinstance(policy_delay, int) or policy_delay < 1:
         raise ValueError("policy_delay must be a positive integer")
 
     class SACDelayed(BaseSAC):
-        """SAC variant with delayed actor updates (à la TD3) and optional weight decay.
-
-        The critics are updated every gradient step, while the actor and the entropy
-        coefficient are only updated once every ``policy_delay`` critic updates.
-        """
+        """Update both critics each step and actor/entropy at policy_delay."""
 
         def __init__(self, *args, **kwargs):
-            """Initializes the delayed-update counter and rebuilds the optimizers with
-            weight decay when ``cfg['weight_decay'] > 0`` (not supported natively by skrl)."""
+            """Read timeout/decay options and initialize the critic step counter."""
             super().__init__(*args, **kwargs)
+
+            # Count critic updates rather than environment steps; gradient_steps
+            # may be greater than one for each environment interaction.
             self._critic_update_counter = 0
             self._policy_delay = policy_delay
 
+            # Time limits and true terminations have different Bellman targets
             self._bootstrap_timeouts = bool(self.cfg.get("bootstrap_timeouts", False))
 
-            # Apply weight decay if specified (skrl SAC doesn't support it natively)
+            # Apply decay in place so any existing scheduler keeps its optimizer
             wd = self.cfg.get("weight_decay", 0.0)
             if wd > 0:
-                # Preserve optimizer identity: schedulers retain references to it.
                 for optimizer in (self.policy_optimizer, self.critic_optimizer):
                     for group in optimizer.param_groups:
                         group["weight_decay"] = wd
 
         def record_transition(self, states, actions, rewards, next_states,
                             terminated, truncated, infos, timestep, timesteps) -> None:
-            """Store the completed episode's physical final state in replay."""
+            """Replace reset observations before skrl writes the replay sample."""
             next_states = terminal_next_states(next_states, terminated, truncated, infos)
 
             super().record_transition(states, actions, rewards, next_states, terminated, truncated, infos, timestep, timesteps)
                                     
         def _update(self, timestep: int, timesteps: int) -> None:
-            """Update critics every step and actor/entropy every policy_delay steps.
+            """Optimize critics every step and actor/entropy at the selected delay.
 
-            Truncations bootstrap from their physical terminal state only when
-            bootstrap_timeouts is enabled in the agent configuration.
+            The replay buffer already holds physical terminal next states.
+            bootstrap_timeouts controls whether a truncated episode contributes
+            a discounted target value; a true termination never does.
             """
+
+            # Each gradient step draws a fresh replay minibatch
             for gradient_step in range(self._gradient_steps):
                 (
                     sampled_states,
@@ -151,7 +170,7 @@ def _make_sac_with_delay(BaseSAC, policy_delay: int):
                     sampled_states      = self._state_preprocessor(sampled_states,      train=True)
                     sampled_next_states = self._state_preprocessor(sampled_next_states, train=True)
 
-                    # --- critic update (every step) ---
+                    # Build a soft Bellman target with the lower target-critic Q
                     with torch.no_grad():
                         next_actions, next_log_prob, _ = self.policy.act(
                             {"states": sampled_next_states}, role="policy"
@@ -165,6 +184,7 @@ def _make_sac_with_delay(BaseSAC, policy_delay: int):
                             role="target_critic_2",
                         )
                         target_q  = torch.min(target_q1, target_q2) - self._entropy_coefficient * next_log_prob
+                        # Time-limit truncation may bootstrap; termination may not
                         target_values = (
                             sampled_rewards
                             + self._discount_factor
@@ -178,11 +198,13 @@ def _make_sac_with_delay(BaseSAC, policy_delay: int):
                     critic_2_values, _, _ = self.critic_2.act(
                         {"states": sampled_states, "taken_actions": sampled_actions}, role="critic_2"
                     )
+                    # Fit both critics to the same detached soft target
                     critic_loss = (
                         F.mse_loss(critic_1_values, target_values)
                         + F.mse_loss(critic_2_values, target_values)
                     ) / 2
 
+                # Apply the critic gradient before deciding whether to update policy
                 self.critic_optimizer.zero_grad()
                 self.scaler.scale(critic_loss).backward()
                 if self._grad_norm_clip > 0:
@@ -195,12 +217,13 @@ def _make_sac_with_delay(BaseSAC, policy_delay: int):
 
                 self._critic_update_counter += 1
 
-                # --- actor + entropy update (every policy_delay critic steps) ---
+                # Actor and entropy updates share the critic-step schedule
                 if self._critic_update_counter % self._policy_delay == 0:
                     with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
                         actions, log_prob, _ = self.policy.act({"states": sampled_states}, role="policy")
                         q1, _, _ = self.critic_1.act({"states": sampled_states, "taken_actions": actions}, role="critic_1")
                         q2, _, _ = self.critic_2.act({"states": sampled_states, "taken_actions": actions}, role="critic_2")
+                        # Favor high Q while retaining the configured entropy
                         policy_loss = (self._entropy_coefficient * log_prob - torch.min(q1, q2)).mean()
 
                     self.policy_optimizer.zero_grad()
@@ -210,6 +233,7 @@ def _make_sac_with_delay(BaseSAC, policy_delay: int):
                         nn.utils.clip_grad_norm_(self.policy.parameters(), self._grad_norm_clip)
                     self.scaler.step(self.policy_optimizer)
 
+                    # Learn the temperature only on actor-update steps
                     if self._learn_entropy:
                         with torch.autocast(device_type=self._device_type, enabled=self._mixed_precision):
                             entropy_loss = -(
@@ -228,13 +252,14 @@ def _make_sac_with_delay(BaseSAC, policy_delay: int):
                                 "Coefficient / Entropy coefficient", self._entropy_coefficient.item()
                             )
 
+                # Advance each scheduler only when its optimizer was stepped
                 self.scaler.update()
                 if self._learning_rate_scheduler:
                     self.critic_scheduler.step()
                     if self._critic_update_counter % self._policy_delay == 0:
                         self.policy_scheduler.step()
 
-                # soft update target critics
+                # Slowly track both online critics after each critic update
                 self.target_critic_1.update_parameters(self.critic_1, polyak=self._polyak)
                 self.target_critic_2.update_parameters(self.critic_2, polyak=self._polyak)
 
@@ -244,12 +269,13 @@ def _make_sac_with_delay(BaseSAC, policy_delay: int):
                     self.track_data("Q-network / Q2 (mean)", torch.mean(critic_2_values).item())
                     self.track_data("Target / Target (mean)", torch.mean(target_values).item())
 
+    # Make the chosen actor delay visible in the generated class name
     SACDelayed.__name__ = f"SACDelayed_delay_{policy_delay}"
     return SACDelayed
 
 
 def _prepare_cfg(cfg: dict, device: str) -> dict:
-    """Deep-copies the configuration and sets device for preprocessors."""
+    """Copy the task config and place its state preprocessor on the agent device."""
     cfg = copy.deepcopy(cfg)
 
     # SAC only uses state_preprocessor (no value_preprocessor like PPO)
@@ -260,7 +286,7 @@ def _prepare_cfg(cfg: dict, device: str) -> dict:
 
 
 def _save_run_info(run_dir: str, cfg: dict, models: dict, agent_cfg: dict, policy_delay: int = 1):
-    """Saves hyperparameters and model architecture to JSON."""
+    """Record model structure, effective hyperparameters and actor delay."""
 
     def _ser(v):
         """Recursively serializes config values to JSON-friendly types (classes -> name,
