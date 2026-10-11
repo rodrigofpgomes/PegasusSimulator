@@ -206,10 +206,6 @@ class QuadcopterEnv(PegasusEnv):
 
         self.episode_length_buf[env_ids] = 0
 
-        if env_ids.numel() == self.num_envs:
-            # Spread out the resets to avoid spikes in training when many environments reset at a similar time
-            self.episode_length_buf = torch.randint_like(self.episode_length_buf, high=int(self.max_episode_length))
-
         self._actions[env_ids] = 0.0
 
         # Randomize new goal positions for the reset environments

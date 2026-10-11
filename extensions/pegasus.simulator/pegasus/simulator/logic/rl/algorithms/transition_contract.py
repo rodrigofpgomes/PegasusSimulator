@@ -81,9 +81,27 @@ class PegasusPPO(PPO):
         # Apply the correction after reward shaping and suppress skrl's timeout term.
         self._time_limit_bootstrap = False
         self._rewards_shaper = lambda r, t, ts: (shaper(r, t, ts) if shaper else r) + correction
+
+        # skrl 1.4.3 indexes its (N, 1) counters with a (K, 2) nonzero result.
+        # Each finished row then also clears row 0, even if vehicle 0 is active.
+        # Preserve that row across the parent call; policy memory is unaffected.
+        done = (terminated | truncated).view(-1)
+        keep_first = self.write_interval > 0 and not done[0] and done[1:].any()
+        if keep_first:
+            previous_steps = (self._cumulative_timesteps[0].clone() if self._cumulative_timesteps is not None
+                              else torch.zeros_like(rewards[0], dtype=torch.int32))
+            previous_rewards = (self._cumulative_rewards[0].clone() if self._cumulative_rewards is not None
+                                else torch.zeros_like(rewards[0]))
+
         try:
-            return super().record_transition(states, actions, rewards, physical,
+            result = super().record_transition(states, actions, rewards, physical,
                 terminated, truncated, infos, timestep, timesteps)
+
+            if keep_first:
+                self._cumulative_timesteps[0] = previous_steps + 1
+                self._cumulative_rewards[0] = previous_rewards + rewards[0]
+
+            return result
         finally:
             # Keep the agent's configuration intact for the following transition.
             self._time_limit_bootstrap, self._rewards_shaper = bootstrap, shaper
