@@ -55,11 +55,10 @@ being reused after a teleport while leaving other vehicles' commands intact.
 The playback agent can then prime its own rotor reference in its `set_state()`
 override.
 
-`ResetManager.reset_envs()` initializes rotor velocities. The normalized reset
-value is stored only when the thruster interface already exposes
-`_reset_rotor_norm`: the ShuttleGlider adapter provides it, and ShuttleGlider
-tasks read it immediately to initialize action history. Regular thrusters do
-not acquire this extra field. The reset manager does not call
+`ResetManager.reset_envs()` initializes rotor velocities. `PegasusEnv` derives
+normalized rotor values from those velocities and the corresponding vehicle's
+rotor limits when a task needs them, including when seeding action history.
+No normalized value is cached on a thruster. The reset manager does not call
 `sync_to_models()`: `ShuttleGliderBatch2.update()` does so before either
 physical propulsion model advances. The method remains necessary there.
 

@@ -446,7 +446,7 @@ class QuadcopterEnv(AlignedTrimMixin, PegasusEnv):
 
         # Seed all three action histories from the same reset command.
         # Surfaces start at cruise trim or neutral for a non-cruise start.
-        reset_rotor = self.backend._vehicle._thrusters._reset_rotor_norm[env_ids]   # (n, 5)
+        reset_rotor = self._normalized_rotor_velocities(env_ids)   # (n, 5)
         reset_action = torch.zeros((n, self.cfg.action_space), device=self.device)
         reset_action[:, :reset_rotor.shape[1]] = reset_rotor
         

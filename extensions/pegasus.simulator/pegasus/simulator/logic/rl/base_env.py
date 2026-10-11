@@ -150,6 +150,16 @@ class PegasusEnv(ABC):
         for fn in self._reset_callbacks:
             fn(env_ids)
 
+    def _normalized_rotor_velocities(self, env_ids: torch.Tensor) -> torch.Tensor:
+        """Return the selected vehicles' actual rotor speeds in [-1, 1]."""
+        thrusters = self.backend._vehicle._thrusters
+        minimum = thrusters.min_rotor_velocity.reshape(-1)
+        maximum = thrusters.max_rotor_velocity.reshape(-1)
+        omega = thrusters.velocity[env_ids]
+
+        # Use the limits of this vehicle, including a separate limit for each rotor
+        return 2.0 * (omega - minimum) / (maximum - minimum) - 1.0
+
 
     # =============================================================================
     # Mandatory Task Interface

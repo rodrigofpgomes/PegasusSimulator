@@ -38,6 +38,32 @@ def load_environment():
 
 
 class BaseEnvironmentContract(unittest.TestCase):
+    def test_rotor_normalization_uses_current_speed_and_vehicle_limits(self):
+        base = load_environment()
+
+        class Thrusters:
+            def __init__(self):
+                self._velocity = torch.tensor([[10.0, 50.0], [20.0, 150.0]])
+                self.min_rotor_velocity = torch.tensor([0.0, 50.0])
+                self.max_rotor_velocity = torch.tensor([20.0, 150.0])
+
+            @property
+            def velocity(self):
+                return self._velocity
+
+        thrusters = Thrusters()
+        env = SimpleNamespace(backend=SimpleNamespace(_vehicle=SimpleNamespace(_thrusters=thrusters)))
+
+        torch.testing.assert_close(
+            base._normalized_rotor_velocities(env, torch.tensor([1])),
+            torch.tensor([[1.0, 1.0]]),
+        )
+        thrusters._velocity[1] = torch.tensor([0.0, 50.0])
+        torch.testing.assert_close(
+            base._normalized_rotor_velocities(env, torch.tensor([1])),
+            torch.tensor([[-1.0, -1.0]]),
+        )
+
     def test_autoreset_keeps_terminal_observation_for_learning(self):
         base = load_environment()
 

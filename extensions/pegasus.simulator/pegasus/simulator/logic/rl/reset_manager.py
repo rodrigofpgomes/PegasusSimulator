@@ -56,8 +56,13 @@ class ResetManager:
     """Reset physical vehicle batches, cached states, rotor speeds and goals."""
 
     def __init__(self, vehicles, device: str = "cuda", goal_cfg=None, init_state_cfg=None):
-        """Store the vehicle batches and allocate goal/reset bookkeeping."""
+        """Prepare shared reset settings for equally sized vehicle batches.
 
+        The first vehicle supplies the batch size and nominal spawn positions.
+        Optional configurations control goal and initial-state randomization.
+        """
+
+        # Keep all comparison vehicles on the same device and reset indices
         self.vehicles = vehicles
         self.device = device
         self.goal_cfg = goal_cfg
@@ -68,9 +73,15 @@ class ResetManager:
         self.n_vehicles = self.main_vehicle.n_vehicles
         if any(v.n_vehicles != self.n_vehicles for v in vehicles):
             raise ValueError("All comparison batches must have the same size")
+
+        # Retain the main vehicle's nominal spawn state for resets and goals
         self._init_pos = self.main_vehicle._init_pos
         self._init_ori = self.main_vehicle._init_orientation
+
+        # Track which rows use the nominal guided start
         self._last_guided = torch.zeros(self.n_vehicles, dtype=torch.bool, device=device)
+
+        # Goal position and derivatives are shared across comparison vehicles
         self._goal_pos = torch.zeros(self.n_vehicles, 3, device=device)
         self._goal_vel = torch.zeros(self.n_vehicles, 3, device=device)
         self._goal_acc = torch.zeros(self.n_vehicles, 3, device=device)
@@ -201,9 +212,6 @@ class ResetManager:
             omega = (rotor_norm + 1.0) * 0.5 * (max_w - min_w).unsqueeze(0) + min_w.unsqueeze(0)
             
             vehicle._thrusters._velocity[env_ids] = omega
-            # The ShuttleGlider adapter stores the normalized reset value for action history
-            if hasattr(vehicle._thrusters, "_reset_rotor_norm"):
-                vehicle._thrusters._reset_rotor_norm[env_ids] = rotor_norm
 
         # Goals belong to the new episode and are updated after the physical reset
         if randomize_goals and self.goal_cfg is not None:
@@ -219,9 +227,11 @@ class ResetManager:
         """Write world pose and velocity to the root PhysX prims only."""
 
         idx = env_ids.to(dtype=torch.long, device=self.device)
+
         # PhysX root velocity is in the world frame at the root COM; the reset API uses body rates.
         ori = ori / torch.linalg.vector_norm(ori, dim=-1, keepdim=True).clamp_min(1e-12)
         omega_world = quaternion_apply(ori, ang_vel)
+
         # Reduced-coordinate articulations reject writes to non-root links. Joint
         # constraints carry the root motion to the other physical parts in PhysX.
         vehicle._root_prims.set_world_poses(positions=pos, orientations=ori, indices=idx)
@@ -240,8 +250,13 @@ class ResetManager:
         return limit.reshape(3)
 
     def _random_quaternions(self, n: int) -> torch.Tensor:
-        """Sample unit quaternions with bounded rotation angle."""
+        """Sample orientations around the identity up to max_angle_deg.
 
+        A uniform direction defines each rotation axis. The angle is sampled
+        between zero and the configured maximum; the result uses (w, x, y, z).
+        """
+
+        # Sample unit rotation axes from spherical coordinates
         max_angle = self.init_state_cfg.max_angle_deg * torch.pi / 180.0
         u = torch.rand(n, device=self.device)
         v = torch.rand(n, device=self.device)
@@ -249,6 +264,8 @@ class ResetManager:
         cos_theta = 1.0 - 2.0 * v
         sin_theta = torch.sqrt(torch.clamp(1.0 - cos_theta ** 2, min=0.0))
         axis = torch.stack([sin_theta * torch.cos(phi), sin_theta * torch.sin(phi), cos_theta], dim=1)
+
+        # Convert the sampled axis and angle into scalar-first quaternions
         angle = torch.rand(n, device=self.device) * max_angle
         half = 0.5 * angle
         q = torch.zeros(n, 4, device=self.device)
@@ -268,18 +285,28 @@ class ResetManager:
     # =============================================================================
 
     def _randomize_goals(self, env_ids: torch.Tensor) -> None:
-        """Sample goal positions for selected environments."""
+        """Sample goals around the main vehicle's initial XY position.
+
+        XY offsets and absolute Z heights follow GoalCfg. Guided rows keep
+        the nominal spawn position as their goal. Goal derivatives start at zero.
+        """
 
         if self.goal_cfg is None:
             return
+
+        # Sample horizontal offsets around each selected vehicle's spawn point
         xy_low, xy_high = self.goal_cfg.goal_pos_xy_range
         z_low, z_high = self.goal_cfg.goal_pos_z_range
         self._goal_pos[env_ids, :2] = torch.zeros_like(self._goal_pos[env_ids, :2]).uniform_(xy_low, xy_high)
         self._goal_pos[env_ids, :2] += self.init_pos[env_ids, :2]
+
+        # Sample absolute goal altitude and clear trajectory derivatives
         self._goal_pos[env_ids, 2] = torch.zeros_like(self._goal_pos[env_ids, 2]).uniform_(z_low, z_high)
         self._goal_vel[env_ids] = 0.0
         self._goal_acc[env_ids] = 0.0
         self._goal_jerk[env_ids] = 0.0
+
+        # Guided starts target their nominal spawn position instead
         guided = self._last_guided[env_ids]
         if guided.any():
             guided_ids = env_ids[guided]

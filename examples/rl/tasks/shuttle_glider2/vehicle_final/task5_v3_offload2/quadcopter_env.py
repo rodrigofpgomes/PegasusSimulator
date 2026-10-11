@@ -516,7 +516,7 @@ class QuadcopterEnv(AlignedTrimMixin, PegasusEnv):
                                modes, turn_radius, turn_dir, vertical_amp, vertical_period)
         self._sync_trajectory_reference(env_ids)
         self.backend.update_goal_markers(self.reset_manager.goal_pos[env_ids], env_ids=env_ids)
-        reset_rotor = self.backend._vehicle._thrusters._reset_rotor_norm[env_ids]
+        reset_rotor = self._normalized_rotor_velocities(env_ids)
         reset_action = torch.zeros((n, self.cfg.action_space), device=self.device)
         reset_action[:, :5] = reset_rotor
         surface_state = torch.where(cruise.unsqueeze(1), surface_trim, torch.zeros_like(surface_trim))

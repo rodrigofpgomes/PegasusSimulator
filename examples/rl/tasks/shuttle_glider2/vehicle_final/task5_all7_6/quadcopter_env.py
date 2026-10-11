@@ -423,9 +423,9 @@ class QuadcopterEnv(AlignedTrimMixin, PegasusEnv):
         self._sync_trajectory_reference(env_ids)
         self.backend.update_goal_markers(self.reset_manager.goal_pos[env_ids], env_ids=env_ids)
 
-        # Reset action history. _reset_rotor_norm only covers the 5 rotors; the 3
-        # control surfaces start neutral (0), so we pad into the 8-wide action.
-        reset_rotor = self.backend._vehicle._thrusters._reset_rotor_norm[env_ids]   # (n, 5)
+        # Reset action history from the 5 rotor speeds. The 3 control surfaces
+        # start neutral (0), so pad the rotor values into the 8-wide action.
+        reset_rotor = self._normalized_rotor_velocities(env_ids)   # (n, 5)
         reset_action = torch.zeros((n, self.cfg.action_space), device=self.device)
         reset_action[:, :reset_rotor.shape[1]] = reset_rotor
         # Seed the physical elevator AND action history consistently in cruise.

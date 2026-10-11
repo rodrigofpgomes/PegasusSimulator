@@ -101,9 +101,6 @@ class _CombinedRotorInterface:
         self._velocity = torch.zeros((self.n_vehicles, self._num_rotors), dtype=torch.float32, device=self.device)
         self._force = torch.zeros((self.n_vehicles, self._num_rotors), dtype=torch.float32, device=self.device)
 
-        # ResetManager stores this value for policy observations
-        self._reset_rotor_norm = torch.zeros((self.n_vehicles, self._num_rotors), dtype=torch.float32, device=self.device)
-
         # Store the reaction moment coefficients and rotation directions of both propulsion models
         self._reaction_moment_coefficient = torch.cat(
             (
