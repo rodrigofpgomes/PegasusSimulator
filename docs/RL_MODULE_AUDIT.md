@@ -115,6 +115,13 @@ import was also removed from SAC. The custom PPO2 and SAC update loops depend
 on skrl internals, so they remain unchanged until they can be checked against
 the version bundled with the training environment.
 
+## Backend interface and goal markers
+
+`RLBackend.update_sensor()` and `update_graphical_sensor()` remain because the
+abstract `Backend` interface requires them. Goal marker creation and updates
+are used by active tasks. The unused `hide_goal_markers()` helper and stored
+marker paths were removed; their implementation remains in commit `41c46c6`.
+
 ## Trim and training export review
 
 The ShuttleGlider `vehicle_final` tasks call `AlignedTrimMixin` to compute

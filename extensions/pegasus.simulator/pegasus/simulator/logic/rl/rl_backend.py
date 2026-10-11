@@ -51,7 +51,6 @@ class RLBackend(Backend):
         self._Kw = None
 
         self._goal_marker_view = None
-        self._goal_marker_paths = []
 
         self._vehicle = None
 
@@ -205,11 +204,11 @@ class RLBackend(Backend):
         self._received_first_state = True
 
     def update_sensor(self, sensor_type: str, data):
-        """Processes generic sensor updates (unused)."""
+        """Satisfy the backend interface; RL observations use vehicle state."""
         pass
 
     def update_graphical_sensor(self, sensor_type: str, data):
-        """Processes graphical sensor updates (unused)."""
+        """Satisfy the backend interface; graphical sensors are not used."""
         pass
 
     def input_reference(self) -> torch.Tensor:
@@ -278,9 +277,6 @@ class RLBackend(Backend):
         if not stage.GetPrimAtPath(root_path).IsValid():
             prim_utils.create_prim(root_path, "Xform")
 
-        self._goal_marker_root = root_path
-        self._goal_marker_paths = []
-
         for i in range(self._n_vehicles):
             prim_path = f"{root_path}/goal_{i}"
             if not stage.GetPrimAtPath(prim_path).IsValid():
@@ -289,7 +285,6 @@ class RLBackend(Backend):
             cube = UsdGeom.Cube(stage.GetPrimAtPath(prim_path))
             cube.CreateSizeAttr(1.0)
             cube.GetDisplayColorAttr().Set([Gf.Vec3f(*color)])
-            self._goal_marker_paths.append(prim_path)
 
         self._goal_marker_view = XFormPrimView(prim_paths_expr=f"{root_path}/goal_*", name="goal_marker_view")
 
@@ -305,20 +300,6 @@ class RLBackend(Backend):
         indices = env_ids.to(device=self._device, dtype=torch.long)
         
         orientations = torch.zeros((positions.shape[0], 4), device=self._device, dtype=torch.float32)
-        orientations[:, 0] = 1.0
-
-        self._goal_marker_view.set_world_poses(positions=positions, orientations=orientations, indices=indices)
-
-    def hide_goal_markers(self, env_ids: torch.Tensor):
-        """Hides the goals by translating them deeply underground."""
-        if self._goal_marker_view is None:
-            return
-
-        indices = env_ids.to(device=self._device, dtype=torch.long)
-        positions = torch.zeros((indices.numel(), 3), device=self._device, dtype=torch.float32)
-        positions[:, 2] = -100.0
-
-        orientations = torch.zeros((indices.numel(), 4), device=self._device, dtype=torch.float32)
         orientations[:, 0] = 1.0
 
         self._goal_marker_view.set_world_poses(positions=positions, orientations=orientations, indices=indices)
