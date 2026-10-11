@@ -162,8 +162,7 @@ class MultirotorBatch(VehicleBatch):
         # 2. Obtain the indices of the rotor prims
         self._resolve_rotor_indices()
 
-        # 3. Cache the rotor positions relative to the vehicle body frame.
-        #    These are used when computing the forces applied in the simulator.
+        # 3. Cache rotor positions in the body frame for control allocation
         self._cache_rotor_positions_body()
 
         # 4. Cache the control allocation matrix that maps desired body-frame
@@ -179,27 +178,32 @@ class MultirotorBatch(VehicleBatch):
         """ No extra actions are required when the simulation stops. """
         return
 
-    # ------------------------------------------------------------------
+    # =============================================================================
     # Prim layout and initialization
-    # ------------------------------------------------------------------
+    # =============================================================================
     
     def _resolve_rotor_indices(self) -> None:
         """
-        Resolve the indices of the rotor prims in the vehicle's USD hierarchy.
-        
-        The method assumes that the first 'parts_per_vehicle' prims in the batch 
-        correspond to the first vehicle, and uses the provided rotor prim names (if any) 
-        to identify which of those prims correspond to rotors. 
-        
-        If rotor prim names are not provided, it assumes that all prims except the one at `body_index` are rotors.
+        Resolve rotor indices in the common rigid prim layout.
+
+        VehicleBatch has already verified that every vehicle has the same part
+        order. Explicit names determine the rotor order used by thrust curve
+        coefficients and commands. Without names, every part except /body is
+        assumed to be a rotor, in RigidPrim view order.
+
+        Raises:
+            RuntimeError: A named rotor is missing or the number of resolved
+                prims differs from the configured number of rotors.
         """
 
+        # All vehicles use the same part indices after VehicleBatch.initialize()
         first_vehicle_paths = self._vehicle_prims.prim_paths[: self.parts_per_vehicle]
         num_rotors = self._thrusters._num_rotors
 
         if self._rotor_prim_names is None:
             indices = tuple(index for index in range(self.parts_per_vehicle) if index != self.body_index)
         else:
+            # Preserve the configured order of rotor names, not the USD prim order
             path_name_to_index = {path.rsplit("/", 1)[-1]: index for index, path in enumerate(first_vehicle_paths)}
             missing = [name for name in self._rotor_prim_names if name not in path_name_to_index]
 
@@ -216,10 +220,10 @@ class MultirotorBatch(VehicleBatch):
 
     def _cache_rotor_positions_body(self):
         """
-        Compute and cache rotor positions relative to the vehicle body frame.
+        Cache rotor origin positions relative to /body in the body frame.
 
-        This only needs to be done once because the rotor locations are fixed
-        with respect to the body.
+        The control allocation matrix assumes these offsets remain fixed
+        throughout the simulation.
         """
 
         positions, attitudes = self._vehicle_prims.get_world_poses()
@@ -233,7 +237,7 @@ class MultirotorBatch(VehicleBatch):
         body_quaternion = attitudes[:, self._body_index, :]     # (n_vehicles, 4)
         rotor_positions = positions[:, self._rotor_indices, :]     # (n_vehicles, num_rotors, 3)
 
-        # Compute rotor positions relative to the body in the world frame
+        # Subtract the /body origin before rotating the offset into body axes
         relative_positions_world = rotor_positions - body_position.unsqueeze(1)
 
         # Expand body quaternion so that one quaternion is associated with each rotor
@@ -245,11 +249,12 @@ class MultirotorBatch(VehicleBatch):
 
     def _cache_allocation_matrix(self):
         """
-        Build and cache the control allocation matrix and its pseudo-inverse.
+        Map squared rotor speeds to [thrust, roll, pitch, yaw] and cache its inverse.
 
-        The matrix maps squared rotor angular velocities to total thrust and body
-        torques. Since the vehicle geometry and rotor coefficients are fixed,
-        this matrix can be computed once during initialization.
+        Each rotor is assumed to produce thrust along +Z in its local frame,
+        aligned with the body +Z axis. The first vehicle supplies the geometry
+        used for every vehicle in the batch. The pseudo-inverse is used when a
+        backend requests body thrust and torque instead of rotor speeds.
         """
 
         # Use the first vehicle as reference since all vehicles share the same geometry
@@ -267,21 +272,21 @@ class MultirotorBatch(VehicleBatch):
         # Total thrust contribution
         self._allocation_matrix[0, :] = kf
 
-        # Roll torque contribution: tau_x = y * Fz
+        # Moment from an offset vertical force: tau_x = y * Fz
         self._allocation_matrix[1, :] = y * kf
 
-        # Pitch torque contribution: tau_y = -x * Fz
+        # Moment from an offset vertical force: tau_y = -x * Fz
         self._allocation_matrix[2, :] = -x * kf
 
-        # Yaw torque contribution from rotor drag
+        # Signed reaction moment about body Z
         self._allocation_matrix[3, :] = km * rotor_directions
 
-        # Precompute pseudo-inverse for fast control allocation (matrix with rank 4)
+        # Cache the pseudo-inverse used to solve for squared rotor speeds
         self._allocation_inv = torch.linalg.pinv(self._allocation_matrix)
 
-    # ------------------------------------------------------------------
+    # =============================================================================
     # Physics
-    # ------------------------------------------------------------------
+    # =============================================================================
 
     def update(self, dt: float):
         """
@@ -308,7 +313,6 @@ class MultirotorBatch(VehicleBatch):
         self._forces.zero_()
         self._torques.zero_()
 
-        # TODO: Add batched propeller visual updates for rotor animation.
         # Rotor angular velocity mode (also used for direct rotor-velocity actions)
         if self._input_mode in ("rotor_velocity", "rotor_velocity_direct"):
 
@@ -317,17 +321,14 @@ class MultirotorBatch(VehicleBatch):
             # Input the desired rotor velocities in the thruster model
             self._thrusters.set_input_reference(desired_rotor_velocities)
 
-            # Compute the rotor thrust forces and the desired rolling_moment
+            # Compute rotor thrust and the summed reaction moment about body Z
             rotor_forces_z, _, rolling_moment = self._thrusters.update(self._state, dt)
 
             # Apply the force in Z to each rotor in the rotor frame
             self._forces[:, self._rotor_indices, 2] = rotor_forces_z
 
-            # Apply the torque to the body frame of the vehicle that corresponds to the rolling moment
+            # Apply the summed reaction moment to the /body prim
             self._torques[:, self._body_index, 2] = rolling_moment
-
-            #carb.log_warn(f"Rotor forces (Z): {rotor_forces_z}")
-            #carb.log_warn(f"Rolling moment: {rolling_moment}")
 
         
         # Direct body force and torque mode
@@ -336,9 +337,8 @@ class MultirotorBatch(VehicleBatch):
             self._forces.copy_(forces)
             self._torques.copy_(torques)
 
-        # Optional: add linear drag on the vehicle body.
+        # Update the drag model; its force is currently excluded from the applied wrench
         drag = self._drag.update(self._state, dt)
-        #self._forces[:, 0, :] += drag
 
         if hasattr(self._backends[0], "external_forces_and_torques"):
             result = self._backends[0].external_forces_and_torques()
@@ -352,13 +352,18 @@ class MultirotorBatch(VehicleBatch):
         self.apply_forces_and_torques_all_parts(self._forces, self._torques)
 
 
+    # =============================================================================
+    # Utilities
+    # =============================================================================
+
     def force_and_torques_to_velocities(self, force: torch.Tensor, torque: torch.Tensor) -> torch.Tensor:
         """
-        Auxiliary method used to get the target angular velocities for each rotor, given the total desired thrust [N] and
-        torque [Nm] to be applied in the multirotor's body frame.
+        Convert desired body thrust and torque into rotor angular velocities.
 
-        Note: This method assumes a quadratic thrust curve. This method will be improved in a future update,
-        and a general thrust allocation scheme will be adopted. For now, it is made to work with multirotors directly.
+        Uses the quadratic thrust model and the cached pseudo-inverse. Negative
+        squared speeds are clipped to zero. Saturation scales all rotor speeds
+        together using the first rotor's maximum speed, so this assumes equal
+        maximum speeds for all rotors.
 
         Args:
             force (torch.Tensor): Desired total thrust along the body Z axis, shape (n_vehicles,)
@@ -397,7 +402,7 @@ class MultirotorBatch(VehicleBatch):
     
     def set_input_mode(self, input_mode: str):
         """
-        Set the control input mode used by the batched multirotor.
+        Set how backend commands are interpreted by the batched multirotor.
 
         Args:
             input_mode (str): Control input mode. 
