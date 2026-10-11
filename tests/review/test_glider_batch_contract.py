@@ -139,14 +139,14 @@ class GliderBatchContract(unittest.TestCase):
         torch.testing.assert_close(self.vehicle.applied_torques[:, 0],
                                    torch.tensor([[.5, .2, .3], [1.3, .5, .6]]))
 
-    def test_direct_command_can_override_one_vehicle_after_partial_reset(self):
-        self.vehicle._actuator_reference[0] = torch.tensor([4., .4, .5, .6])
-        self.vehicle._direct_reference_mask[0] = True
+    def test_first_backend_controls_every_vehicle_on_each_update(self):
+        self.vehicle.update(0.01)
+        self.backend.command = torch.tensor([[4., .4, .5, .6], [5., -.4, -.5, -.6]])
 
-        command = self.vehicle._get_actuator_reference()
+        self.vehicle.update(0.01)
 
-        torch.testing.assert_close(command[0], torch.tensor([4., .4, .5, .6]))
-        torch.testing.assert_close(command[1], self.backend.command[1])
+        torch.testing.assert_close(self.vehicle.surface_deflections, self.backend.command[:, 1:4])
+        torch.testing.assert_close(self.vehicle.thrusters._input_reference, self.backend.command[:, 0:1])
 
 
 if __name__ == "__main__":

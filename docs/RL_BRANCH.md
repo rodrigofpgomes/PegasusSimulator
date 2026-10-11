@@ -37,12 +37,12 @@ loading its default coefficient.
 [Omega_p, delta_e, delta_a, delta_r]
 ```
 
-The puller is the only rotor. Its thrust acts at the `rotor` prim, while the
-reaction moment acts along the configured puller axis on `/body`. The included
-`easyglider.usda` uses `/body` as the aerodynamic reference origin. Direct
-commands remain available for standalone runs and can override selected
-vehicles while the others follow the backend. No RL task for this vehicle is
-included yet.
+The first backend supplies all four commands. The puller is the only rotor. Its
+thrust acts at the `rotor` prim, while the reaction moment acts along the
+configured puller axis on `/body`. The included `easyglider.usda` uses `/body`
+as the aerodynamic reference origin. An airborne reset can initialize the
+rotor velocity; subsequent commands still come from the first backend. No RL
+task for this vehicle is included yet.
 
 ## Validation and scope
 
@@ -51,8 +51,8 @@ included yet.
   models in a CPU check.
 - The four CPU checks in `tests/review/test_torch_contracts.py` passed, including
   a reset-velocity and motor-update check for the combined rotor interface.
-- The CPU Glider contract checks the four-channel command, propeller force,
-  reaction torque axis and per-vehicle direct command override.
+- The CPU Glider contract checks the four-channel backend command, propeller
+  force, reaction torque axis and command updates for every vehicle.
 - An Isaac Sim or SITL run has not yet been performed for this branch.
 - `MultirotorBatch` currently updates its drag model without applying its force;
   its control allocation also assumes equal maximum speeds for all rotors.
