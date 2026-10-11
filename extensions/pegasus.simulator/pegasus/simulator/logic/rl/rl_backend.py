@@ -10,6 +10,8 @@ __all__ = ["RLBackend"]
 import torch
 from pegasus.simulator.logic.backends.backend import Backend
 from pegasus.simulator.logic.state_batch import StateBatch
+from pegasus.simulator.logic.transforms import quaternion_apply, quaternion_to_matrix
+from pegasus.simulator.logic.vehicles.multirotor_batch import MultirotorBatch
 
 import isaacsim.core.utils.prims as prim_utils
 from omni.isaac.core.prims import XFormPrimView
@@ -23,12 +25,13 @@ class RLBackend(Backend):
     The vehicle reads these buffers during each physics step.
     """
 
-    def __init__(self, n_vehicles: int, action_mode: str = "direct_force", device: str | None = None):
-        """Initialize the batched backend and its control mode."""
+    def __init__(self, n_vehicles: int, action_mode: str = "direct_force", inner_loop: bool = False, device: str | None = None):
+        """Initialize the batched backend and optional multirotor attitude loop."""
         super().__init__(config=None)
 
         self._n_vehicles = n_vehicles
         self._action_mode = action_mode
+        self._inner_loop = inner_loop
 
         # Initialized later in start()
         self._parts_per_vehicle = None
@@ -43,6 +46,9 @@ class RLBackend(Backend):
         self._input_reference = None
         self._state_cache = None
         self._received_first_state = False
+
+        self._Kr = None
+        self._Kw = None
 
         self._goal_marker_view = None
         self._goal_marker_paths = []
@@ -78,6 +84,11 @@ class RLBackend(Backend):
 
     def start(self):
         """Allocates PyTorch buffers once the simulation timeline starts."""
+        # The attitude loop allocates rotor speeds through MultirotorBatch only
+        if self._inner_loop:
+            if self._action_mode != "rotor_velocity" or not isinstance(self.vehicle, MultirotorBatch):
+                raise ValueError("inner_loop requires a MultirotorBatch in rotor_velocity mode")
+
         self._n_vehicles = self.vehicle.n_vehicles
         self._parts_per_vehicle = self.vehicle.parts_per_vehicle
         self._device = self.vehicle.device or self._device
@@ -97,9 +108,15 @@ class RLBackend(Backend):
 
         self._received_first_state = False
 
-        # Tasks call this mode direct_force; vehicles name the same mode forces_torques
-        vehicle_mode = "forces_torques" if self._action_mode == "direct_force" else self._action_mode
-        self.vehicle.set_input_mode(vehicle_mode)
+        if self._inner_loop:
+            # Body-frame proportional attitude and angular-rate gains
+            self._Kr = torch.diag(torch.tensor([3.5, 3.5, 3.5], dtype=torch.float32, device=self._device))
+            self._Kw = torch.diag(torch.tensor([0.5, 0.5, 0.5], dtype=torch.float32, device=self._device))
+
+        # Set the vehicle control mode based on the action mode defined in the task
+        # Modes: rotor_velocity_direct, rotor_velocity or direct_force
+        # rotor_velocity is only available for multirotor vehicles
+        self.vehicle.set_input_mode(self._action_mode)
 
     def stop(self):
         """Callback for when the simulation stops (unused)."""
@@ -117,16 +134,65 @@ class RLBackend(Backend):
         self._received_first_state = False
 
     def update(self, dt: float):
-        """Allocate a requested body wrench to rotors in rotor_velocity mode."""
+        """Convert a requested force and moment into multirotor speed commands."""
         # Direct force and direct rotor-speed modes already hold their commands
         if not self._received_first_state or self._action_mode != "rotor_velocity":
             return
 
-        # Convert the requested body thrust and torque to rotor velocities
-        body_index = self.vehicle.body_index
-        u_1 = self._forces[:, body_index, 2]
-        tau = self._torques[:, body_index, :]
+        if self._inner_loop:
+            # Align body Z with the desired world force before rotor allocation
+            u_1, tau = self._attitude_inner_loop()
+        else:
+            # Allocate the requested body thrust and moment directly
+            body_index = self.vehicle.body_index
+            u_1 = self._forces[:, body_index, 2]
+            tau = self._torques[:, body_index, :]
+
         self._input_reference = self.vehicle.force_and_torques_to_velocities(u_1, tau)
+
+    def _attitude_inner_loop(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Compute body thrust and attitude moments from the requested local force."""
+        body_index = self.vehicle.body_index
+        body_force = self._forces[:, body_index, :]
+        attitude = self._state_cache[:, 6:10]
+        angular_velocity = self._state_cache[:, 10:13]
+
+        # Commands are stored in the /body frame; attitude control uses world axes
+        desired_force_world = quaternion_apply(attitude, body_force)
+        rotation = quaternion_to_matrix(attitude)
+        body_z_world = rotation[:, :, 2]
+
+        # Only positive thrust along the current body Z can be produced
+        thrust = torch.sum(desired_force_world * body_z_world, dim=-1).clamp_min(0.0)
+
+        # Point desired body Z along the commanded world force. A zero force
+        # keeps the current direction and produces zero thrust.
+        force_norm = torch.linalg.vector_norm(desired_force_world, dim=-1, keepdim=True)
+        active = force_norm.squeeze(-1) > 1e-6
+        desired_z = torch.where(
+            active.unsqueeze(-1),
+            desired_force_world / force_norm.clamp_min(1e-6),
+            body_z_world,
+        )
+
+        # Fixed world X sets the desired yaw; world Y handles parallel axes
+        world_x = torch.tensor([1.0, 0.0, 0.0], device=self._device).expand_as(desired_z)
+        world_y = torch.tensor([0.0, 1.0, 0.0], device=self._device).expand_as(desired_z)
+        desired_y = torch.cross(desired_z, world_x, dim=-1)
+        parallel = torch.linalg.vector_norm(desired_y, dim=-1, keepdim=True) < 1e-6
+        desired_y = torch.where(parallel, torch.cross(desired_z, world_y, dim=-1), desired_y)
+        desired_y = desired_y / torch.linalg.vector_norm(desired_y, dim=-1, keepdim=True)
+        desired_x = torch.cross(desired_y, desired_z, dim=-1)
+        desired_rotation = torch.stack((desired_x, desired_y, desired_z), dim=-1)
+
+        # Combine requested body moments with attitude correction and rate damping
+        error_matrix = desired_rotation.transpose(1, 2) @ rotation - rotation.transpose(1, 2) @ desired_rotation
+        attitude_error = 0.5 * torch.stack(
+            (error_matrix[:, 2, 1], error_matrix[:, 0, 2], error_matrix[:, 1, 0]), dim=-1
+        )
+        moment = self._torques[:, body_index, :] - (attitude_error @ self._Kr.T) - (angular_velocity @ self._Kw.T)
+
+        return thrust, moment
 
     def update_state(self, state: StateBatch):
         """Caches the new physics state after a simulation step."""

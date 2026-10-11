@@ -50,19 +50,19 @@ being reused after a teleport while leaving other vehicles' commands intact.
 The playback agent can then prime its own rotor reference in its `set_state()`
 override.
 
-The task mode `direct_force` is translated to the vehicle mode `forces_torques`
-when the backend starts. Without that translation, direct-force RL tasks fail
-at `vehicle.set_input_mode()` before training starts.
+The three batched vehicles now accept the task mode `direct_force` directly.
+`rotor_velocity_direct` passes commanded speeds to the thruster models, while
+`direct_force` applies the requested per-part loads without motor dynamics.
 
-The unused optional attitude controller inside `RLBackend.update()` was removed.
-The current RL tasks use `direct_force` or `rotor_velocity_direct`; the simpler
-`rotor_velocity` wrench-to-rotor allocation remains available and reads the
-vehicle's resolved body index. The controller's
-exact prior code is recoverable with:
-
-```bash
-git show 553538e:extensions/pegasus.simulator/pegasus/simulator/logic/rl/rl_backend.py
-```
+For `MultirotorBatch`, `rotor_velocity` converts body thrust and moments into
+rotor-speed commands. With `inner_loop=True`, the backend also computes an
+attitude correction from the requested body-frame force and current attitude;
+the requested body moment is retained as a feedforward term. The resulting
+rotor speeds pass through the multirotor's thruster dynamics. This mode is
+restricted to `MultirotorBatch`. Its thrust projection is limited to positive
+values because the rotors cannot reverse their thrust direction. The current
+task presets still use `direct_force` or `rotor_velocity_direct`; the inner
+loop is available for future multirotor tasks.
 
 The separate playback LQR controller also retains attitude-control logic.
 Checks protecting reset orientation and batch layout remain because invalid

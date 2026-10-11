@@ -7,6 +7,7 @@
 
 import ast
 from pathlib import Path
+import runpy
 from types import SimpleNamespace
 import unittest
 
@@ -25,12 +26,24 @@ class BackendStub:
         return self._vehicle
 
 
+class MultirotorBatchStub:
+    pass
+
+
 def load_backend():
     """Load the production backend class without Isaac Sim imports."""
     source = LOGIC / "rl/rl_backend.py"
     tree = ast.parse(source.read_text())
     definition = next(node for node in tree.body if isinstance(node, ast.ClassDef) and node.name == "RLBackend")
-    namespace = {"torch": torch, "Backend": BackendStub, "StateBatch": object}
+    transforms = runpy.run_path(str(LOGIC / "transforms.py"))
+    namespace = {
+        "torch": torch,
+        "Backend": BackendStub,
+        "StateBatch": object,
+        "MultirotorBatch": MultirotorBatchStub,
+        "quaternion_apply": transforms["quaternion_apply"],
+        "quaternion_to_matrix": transforms["quaternion_to_matrix"],
+    }
     exec(compile(ast.Module(body=[definition], type_ignores=[]), str(source), "exec"), namespace)
     return namespace["RLBackend"]
 
@@ -65,7 +78,7 @@ class RLBackendResetContract(unittest.TestCase):
         self.backend._action_mode = "direct_force"
         self.backend.start()
 
-        self.assertEqual(self.selected_vehicle_mode, "forces_torques")
+        self.assertEqual(self.selected_vehicle_mode, "direct_force")
 
     def test_partial_reset_clears_only_selected_commands(self):
         ids = torch.tensor([1])
@@ -107,6 +120,51 @@ class RLBackendResetContract(unittest.TestCase):
             self.backend.input_reference(),
             torch.tensor([[1.0, 4.0, 5.0, 6.0], [2.0, 4.0, 5.0, 6.0], [3.0, 4.0, 5.0, 6.0]]),
         )
+
+    def test_inner_loop_requires_multirotor_in_rotor_velocity_mode(self):
+        backend_class = load_backend()
+        backend = backend_class(n_vehicles=3, action_mode="rotor_velocity", inner_loop=True, device="cpu")
+        backend.initialize(self.backend.vehicle)
+
+        with self.assertRaisesRegex(ValueError, "MultirotorBatch"):
+            backend.start()
+
+    def test_inner_loop_allocates_body_force_and_moment_to_rotors(self):
+        backend_class = load_backend()
+        backend = backend_class(n_vehicles=2, action_mode="rotor_velocity", inner_loop=True, device="cpu")
+        vehicle = MultirotorBatchStub()
+        vehicle.n_vehicles = 2
+        vehicle.parts_per_vehicle = 2
+        vehicle.body_index = 1
+        vehicle.device = "cpu"
+        vehicle._thrusters = SimpleNamespace(_num_rotors=4)
+        vehicle.set_input_mode = lambda mode: setattr(vehicle, "input_mode", mode)
+        vehicle.force_and_torques_to_velocities = lambda thrust, torque: torch.cat(
+            (thrust.unsqueeze(-1), torque), dim=-1
+        )
+        backend.initialize(vehicle)
+        backend.start()
+
+        # One tilted command and one zero-force command exercise both paths
+        backend.set_state(
+            torch.tensor([0, 1]),
+            torch.zeros((2, 3)),
+            torch.tensor([[1.0, 0.0, 0.0, 0.0]]).expand(2, -1),
+        )
+        forces = torch.zeros((2, 2, 3))
+        torques = torch.zeros_like(forces)
+        forces[0, 1] = torch.tensor([1.0, 0.0, 1.0])
+        torques[0, 1, 2] = 0.2
+        torques[1, 1, 2] = 0.3
+        backend.set_forces_and_torques(forces, torques)
+        backend.update(0.01)
+
+        reference = backend.input_reference()
+        self.assertEqual(vehicle.input_mode, "rotor_velocity")
+        self.assertTrue(torch.isfinite(reference).all())
+        torch.testing.assert_close(reference[:, 0], torch.tensor([1.0, 0.0]))
+        torch.testing.assert_close(reference[:, 3], torch.tensor([0.2, 0.3]))
+        self.assertGreater(abs(reference[0, 2].item()), 0.0)
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.transforms import quaternion_apply, quaternion_invert
 
 
-InputMode = Literal["rotor_velocity_direct", "forces_torques"]
+InputMode = Literal["rotor_velocity_direct", "direct_force"]
 
 
 # =============================================================================
@@ -518,9 +518,9 @@ class ShuttleGliderBatch2(VehicleBatch):
 
         Args:
             input_mode (str): Control input mode. 
-            Expected values are "rotor_velocity_direct", or "forces_torques".
+            Expected values are "rotor_velocity_direct" or "direct_force".
         """
-        if input_mode not in ("rotor_velocity_direct", "forces_torques"):
+        if input_mode not in ("rotor_velocity_direct", "direct_force"):
             raise ValueError("Unsupported ShuttleGliderBatch input mode: " f"{input_mode}")
 
         self._input_mode = input_mode

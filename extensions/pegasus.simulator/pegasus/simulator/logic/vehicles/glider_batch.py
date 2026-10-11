@@ -33,7 +33,7 @@ from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.transforms import quaternion_apply, quaternion_invert
 
 
-InputMode = Literal["rotor_velocity_direct", "forces_torques"]
+InputMode = Literal["rotor_velocity_direct", "direct_force"]
 
 
 # =============================================================================
@@ -377,8 +377,8 @@ class GliderBatch(VehicleBatch):
         self._torques.zero_()
         self._aero_wrench_local = None
 
-        # The backend can supply per-part loads directly in forces_torques mode
-        if self._input_mode == "forces_torques":
+        # The backend can supply per-part loads directly in direct_force mode
+        if self._input_mode == "direct_force":
             if not hasattr(self._backends[0], "get_forces_and_torques"):
                 raise RuntimeError("The selected backend does not implement get_forces_and_torques().")
 
@@ -472,11 +472,11 @@ class GliderBatch(VehicleBatch):
 
         Args:
             input_mode (str): "rotor_velocity_direct" for the backend's four
-                commands, or "forces_torques" for per-part loads.
+                commands or "direct_force" for per-part loads.
         """
 
-        if input_mode not in ("rotor_velocity_direct", "forces_torques"):
-            raise ValueError("GliderBatch input_mode must be 'rotor_velocity_direct' or 'forces_torques'.")
+        if input_mode not in ("rotor_velocity_direct", "direct_force"):
+            raise ValueError("GliderBatch input_mode must be 'rotor_velocity_direct' or 'direct_force'.")
         
         self._input_mode = input_mode
 
