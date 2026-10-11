@@ -62,7 +62,7 @@ class TensorContracts(unittest.TestCase):
         self.assertTrue((vehicle._root_prims.pos[[0,2]]==0).all())
         self.assertTrue((vehicle._root_prims.vel[[0,2]]==0).all())
 
-    def test_combined_rotors_keep_reset_and_physical_states_in_sync(self):
+    def test_combined_rotors_keep_reset_velocities_in_sync(self):
         self.ns['State'] = object
         self.ns['ThrustCurve'] = object
         self.ns['Sequence'] = list
@@ -88,10 +88,9 @@ class TensorContracts(unittest.TestCase):
         reset_velocity = torch.tensor([[100., 200., 300., 400., 500.],
                                        [600., 700., 800., 900., 1000.]])
         combined._velocity[:] = reset_velocity
-        combined._input_reference[:] = reset_velocity
         combined.sync_to_models()
         torch.testing.assert_close(shuttle._velocity, reset_velocity[:, :4])
-        torch.testing.assert_close(glider._input_reference, reset_velocity[:, 4:5])
+        torch.testing.assert_close(glider._velocity, reset_velocity[:, 4:5])
 
         command = reset_velocity + 10.0
         shuttle.set_input_reference(command[:, :4])
@@ -100,10 +99,7 @@ class TensorContracts(unittest.TestCase):
         glider.update(None, 0.01)
         combined.sync_from_models()
 
-        torch.testing.assert_close(combined._input_reference, command)
         torch.testing.assert_close(combined._velocity, command)
-        torch.testing.assert_close(combined._force,
-                                   torch.cat((shuttle.force, glider.force), dim=1))
 
     def test_longitudinal_trim_force_and_pitch_balance(self):
         definitions(Path('dynamics/glider_aerodynamics.py'),['GliderGeometry','GliderCoefficients','CL_CD'],self.ns)

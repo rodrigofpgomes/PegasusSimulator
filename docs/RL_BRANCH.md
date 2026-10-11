@@ -15,8 +15,8 @@ small, focused changes.
 
 The four shuttle rotors and the puller use separate thrust models. The combined
 five-rotor interface supplies velocity limits and rotor state to the RL backend and
-reset logic. It synchronizes reset references and velocities into both physical
-models and exposes their current references, velocities, and forces to RL code.
+reset logic. It synchronizes reset velocities into both physical models and
+exposes their current velocities to RL code.
 Longitudinal trim also reads the five thrust coefficients and rotor
 positions in the body frame.
 
@@ -35,8 +35,10 @@ loading its default coefficient.
 - All seven final task configurations instantiated and updated both batched thrust
   models in a CPU check.
 - The four CPU checks in `tests/review/test_torch_contracts.py` passed, including
-  a reset and motor-update check for the combined rotor interface.
+  a reset-velocity and motor-update check for the combined rotor interface.
 - An Isaac Sim or SITL run has not yet been performed for this branch.
+- `MultirotorBatch` currently updates its drag model without applying its force;
+  its control allocation also assumes equal maximum speeds for all rotors.
 - Training logs, checkpoints, recovered snapshots, and backup copies were excluded
   from the initial import. Historical tasks with five-action contracts still need a
   separate migration decision.
