@@ -4,6 +4,10 @@
 | License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
 | Description: RSL-RL-like PPO training using the skrl infrastructure.
 |
+| Algorithm reference: the PPO update is adapted from the RSL-RL PPO
+| implementation, using skrl for models, rollout memory and training.
+| RSL-RL source: https://github.com/leggedrobotics/rsl_rl/blob/main/rsl_rl/algorithms/ppo.py
+|
 | Relative to skrl 1.4.3 PPO (skrl/agents/torch/ppo/ppo.py):
 |   - PegasusPPO replaces autoreset observations with physical terminal states
 |     and bootstraps timeouts from the terminal value (transition_contract.py).

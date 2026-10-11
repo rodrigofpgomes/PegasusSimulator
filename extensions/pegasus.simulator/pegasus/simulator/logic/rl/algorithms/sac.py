@@ -4,6 +4,14 @@
 | License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
 | Description: SAC training via skrl - generic and task-agnostic.
 |
+| Algorithm reference: the delayed actor update follows the SAC training
+| cadence used for RAPTOR foundation-policy pre-training. That configuration
+| updates the critic every training interval and the actor every two intervals.
+| This file adapts the scheduling idea to skrl; it is not a port of RAPTOR's
+| C++ SAC implementation.
+| RAPTOR: https://github.com/rl-tools/raptor
+| Pre-training config: https://github.com/rl-tools/rl-tools/blob/e43ae4bcda4556321a63f4eb5dcc826cd637aa39/src/foundation_policy/pre_training/config.h
+|
 | Relative to skrl 1.4.3 SAC (skrl/agents/torch/sac/sac.py):
 |   - The agent stores the physical final observation from Pegasus autoreset
 |     transitions instead of the next episode's reset observation.
