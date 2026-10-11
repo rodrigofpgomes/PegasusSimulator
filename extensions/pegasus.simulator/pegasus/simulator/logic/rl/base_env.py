@@ -25,15 +25,13 @@ class PegasusEnvCfg:
     episode_length_s: float = 10.0
     decimation: int = 2
     sim_dt: float = 0.01
-    action_mode: str = "direct_force"  # "direct_force" or "rotor_velocity"
+    action_mode: str = "direct_force"  # "direct_force", "rotor_velocity" or "rotor_velocity_direct"
     observation_source: str = "ground_truth"
     vehicle: str = "Iris"              # key into pegasus.simulator.params.ROBOTS
 
 
 class PegasusEnv(ABC):
-    """
-    Base class enforcing the Gym/IsaacLab interface expected by skrl.
-    """
+    """Base interface for batched Pegasus tasks consumed by the skrl wrapper."""
 
     def __init__(self, cfg: PegasusEnvCfg, backend, reset_manager):
         """Builds the vectorized environment from its config, backend and reset manager.
@@ -50,12 +48,8 @@ class PegasusEnv(ABC):
         self.reset_manager = reset_manager
 
         self.num_envs = backend.n_vehicles
-        self.num_obs = cfg.observation_space
-        self.num_actions = cfg.action_space
-        self.num_states = cfg.state_space
-
+        # One control step contains the configured number of physics steps
         self.max_episode_length = int(cfg.episode_length_s / (cfg.sim_dt * cfg.decimation))
-        self.max_episode_length_s = cfg.episode_length_s
         self.step_dt = cfg.sim_dt * cfg.decimation
 
         self.extras: dict = {}
@@ -67,18 +61,9 @@ class PegasusEnv(ABC):
         self.reset_terminated = None
         self.reset_time_outs = None
 
-        # Expose Gymnasium spaces
-        obs_spaces = {
-            "policy": gym.spaces.Box(low=-np.inf, high=np.inf, shape=(cfg.observation_space,), dtype=np.float32)
-        }
-        if cfg.state_space and cfg.state_space > 0:
-            obs_spaces["critic"] = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(cfg.state_space,), dtype=np.float32)
-
-        single_observation_space = gym.spaces.Dict(obs_spaces)
-
-        self.observation_space = single_observation_space["policy"]
-        self.state_space = single_observation_space.spaces.get("critic", None)
-
+        # The wrapper reads the policy and optional critic spaces separately
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(cfg.observation_space,), dtype=np.float32)
+        self.state_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(cfg.state_space,), dtype=np.float32) if cfg.state_space > 0 else None
         self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(cfg.action_space,), dtype=np.float32)
 
 
@@ -104,9 +89,9 @@ class PegasusEnv(ABC):
         return self
 
 
-    # -------------------------------------------
+    # =============================================================================
     # Public API
-    # -------------------------------------------
+    # =============================================================================
 
     def step(self, actions: torch.Tensor):
         """Advance physics, record terminal data, then reset completed episodes."""
@@ -152,14 +137,13 @@ class PegasusEnv(ABC):
         self._reset_callbacks.append(fn)
 
 
-    # -------------------------------------------
+    # =============================================================================
     # Internal Methods
-    # -------------------------------------------
+    # =============================================================================
 
     def _world_step(self):
         """Advances the physics simulation by one step (with or without rendering)."""
-        if hasattr(self, "_world"):
-            self._world.step(render=self._render_enabled)
+        self._world.step(render=self._render_enabled)
 
     def _call_reset_callbacks(self, env_ids: torch.Tensor):
         """Executes the registered callback functions for the reset environments."""
@@ -167,9 +151,9 @@ class PegasusEnv(ABC):
             fn(env_ids)
 
 
-    # -------------------------------------------
+    # =============================================================================
     # Mandatory Task Interface
-    # -------------------------------------------
+    # =============================================================================
 
     @abstractmethod
     def _pre_physics_step(self, actions: torch.Tensor):

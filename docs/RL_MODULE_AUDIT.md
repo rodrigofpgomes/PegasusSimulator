@@ -55,6 +55,21 @@ being reused after a teleport while leaving other vehicles' commands intact.
 The playback agent can then prime its own rotor reference in its `set_state()`
 override.
 
+`ResetManager.reset_envs()` initializes rotor velocities and normalized rotor
+observations. It no longer writes the motor input reference, because the first
+backend supplies the next command before the thruster model updates. The
+ShuttleGlider adapter still synchronizes the initialized velocities into its
+two physical propulsion models.
+
+`PegasusEnv` now builds the policy and optional critic spaces directly. Four
+unused copies of config dimensions and episode duration were removed; the
+configuration remains available as `env.cfg`. Its reset callback hook stays
+because task reset methods call it, allowing external users to attach reset
+bookkeeping without changing task implementations. No current launcher
+registers such a callback.
+The physics step now uses the `World` attached by the training or playback
+launcher directly, so a missing world fails at the point of use.
+
 The three batched vehicles now accept the task mode `direct_force` directly.
 `rotor_velocity_direct` passes commanded speeds to the thruster models, while
 `direct_force` applies the requested per-part loads without motor dynamics.

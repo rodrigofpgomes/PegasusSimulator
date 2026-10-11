@@ -205,8 +205,7 @@ class ResetManager:
             if not hasattr(vehicle._thrusters, "_reset_rotor_norm"):
                 vehicle._thrusters._reset_rotor_norm = torch.zeros_like(vehicle._thrusters._velocity)
             vehicle._thrusters._reset_rotor_norm[env_ids] = rotor_norm
-            if hasattr(vehicle._thrusters, "_input_reference"):
-                vehicle._thrusters._input_reference[env_ids] = omega
+            # The first backend supplies the next motor command after reset
             if hasattr(vehicle._thrusters, "sync_to_models"):
                 vehicle._thrusters.sync_to_models()
             # Discard loads and surface angles retained by the previous episode
