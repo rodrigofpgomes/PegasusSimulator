@@ -129,7 +129,7 @@ class RLBackendResetContract(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "MultirotorBatch"):
             backend.start()
 
-    def test_inner_loop_allocates_body_force_and_moment_to_rotors(self):
+    def test_inner_loop_uses_body_force_without_previous_moment(self):
         backend_class = load_backend()
         backend = backend_class(n_vehicles=2, action_mode="rotor_velocity", inner_loop=True, device="cpu")
         vehicle = MultirotorBatchStub()
@@ -145,7 +145,7 @@ class RLBackendResetContract(unittest.TestCase):
         backend.initialize(vehicle)
         backend.start()
 
-        # One tilted command and one zero-force command exercise both paths
+        # Previous moments must not affect either the tilted or zero-force command
         backend.set_state(
             torch.tensor([0, 1]),
             torch.zeros((2, 3)),
@@ -163,7 +163,7 @@ class RLBackendResetContract(unittest.TestCase):
         self.assertEqual(vehicle.input_mode, "rotor_velocity")
         self.assertTrue(torch.isfinite(reference).all())
         torch.testing.assert_close(reference[:, 0], torch.tensor([1.0, 0.0]))
-        torch.testing.assert_close(reference[:, 3], torch.tensor([0.2, 0.3]))
+        torch.testing.assert_close(reference[:, 3], torch.zeros(2))
         self.assertGreater(abs(reference[0, 2].item()), 0.0)
 
     def test_hide_goal_markers_moves_only_selected_markers(self):

@@ -133,7 +133,7 @@ class RLBackend(Backend):
         self._received_first_state = False
 
     def update(self, dt: float):
-        """Convert a requested force and moment into multirotor speed commands."""
+        """Convert body-frame force, and optionally moment, into rotor speeds."""
         # Direct force and direct rotor-speed modes already hold their commands
         if not self._received_first_state or self._action_mode != "rotor_velocity":
             return
@@ -152,9 +152,9 @@ class RLBackend(Backend):
     def _attitude_inner_loop(self) -> tuple[torch.Tensor, torch.Tensor]:
         """Compute multirotor thrust and moments for a fixed-yaw attitude target.
 
-        The task supplies forces and moments in the body frame. The geometric
-        attitude construction uses world-frame force, while the output moment
-        and measured angular velocity remain in the body frame.
+        The task supplies the desired force in the body frame. Rotate it to
+        world axes only to construct the desired attitude. The inner loop
+        computes its own body-frame moment from attitude and angular-rate errors.
         """
         body_index = self.vehicle.body_index
         body_force = self._forces[:, body_index, :]
@@ -200,10 +200,10 @@ class RLBackend(Backend):
             (e_R_mat[:, 2, 1], e_R_mat[:, 0, 2], e_R_mat[:, 1, 0]), dim=-1
         )
 
-        # Desired body rate is zero; add the requested moment as a feedforward term
+        # Desired body rate is zero; compute the moment from attitude and rate errors
         w_des = torch.zeros_like(w)
         e_w = w - w_des
-        tau = self._torques[:, body_index, :] - (e_R @ self._Kr.T) - (e_w @ self._Kw.T)
+        tau = -(e_R @ self._Kr.T) - (e_w @ self._Kw.T)
 
         return u_1, tau
 

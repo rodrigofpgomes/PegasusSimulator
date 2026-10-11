@@ -87,8 +87,8 @@ The three batched vehicles now accept the task mode `direct_force` directly.
 
 For `MultirotorBatch`, `rotor_velocity` converts body thrust and moments into
 rotor-speed commands. With `inner_loop=True`, the backend also computes an
-attitude correction from the requested body-frame force and current attitude;
-the requested body moment is retained as a feedforward term. The resulting
+attitude correction from the requested body-frame force and current attitude.
+It computes the moment from attitude and angular-rate errors alone. The resulting
 rotor speeds pass through the multirotor's thruster dynamics. This mode is
 restricted to `MultirotorBatch`. Its thrust projection is limited to positive
 values because the rotors cannot reverse their thrust direction. The current
@@ -101,9 +101,9 @@ attitude error, and proportional attitude/rate moments. It is **not exactly the
 same calculation** as the original `553538e` version. The task supplies force
 in body axes, so the current loop rotates it to world axes before constructing
 the target; it also uses the resolved body index, clips negative collective
-thrust, handles zero force and parallel reference axes, and adds the requested
-body moment as a feedforward term. The original loop used part index zero,
-treated its force as already world-aligned, and ignored the requested moment.
+thrust, and handles zero force and parallel reference axes. The original loop
+used part index zero and treated its force as already world-aligned. Both loops
+compute the moment from attitude and rate errors without a requested moment.
 
 The separate playback LQR controller also retains attitude-control logic.
 Checks protecting reset orientation and batch layout remain because invalid
