@@ -1092,7 +1092,7 @@ def make_iris_cfg():
     return {
         "num_rotors": 4,
         "rotor_constant": [5.84e-6] * 4,
-        "rolling_moment_coefficient": [3.504e-7] * 4, # 5.84e-06 * 0.06
+        "reaction_moment_coefficient": [3.504e-7] * 4, # 5.84e-06 * 0.06
         "rot_dir": [-1, -1, 1, 1],
         "min_rotor_velocity": [0.0, 0.0, 0.0, 0.0],
         "max_rotor_velocity": [1100.0, 1100.0, 1100.0, 1100.0],
@@ -1106,7 +1106,7 @@ def make_crazyflie_cfg():
     return {
         "num_rotors": 4,
         "rotor_constant": [2.8815744627880866e-8] * 4,
-        "rolling_moment_coefficient": [1.7187300725171608e-10] * 4,
+        "reaction_moment_coefficient": [1.7187300725171608e-10] * 4,
         "rot_dir": [-1, 1, -1, 1],
         "min_rotor_velocity": [0.0, 0.0, 0.0, 0.0],
         "max_rotor_velocity": [2272.6281256068564, 2272.6281256068564, 2272.6281256068564, 2272.6281256068564],
@@ -1119,7 +1119,7 @@ def make_shuttle_cfg():
     return {
         "num_rotors": 4,
         "rotor_constant": [1.709716e-05] * 4,
-        "rolling_moment_coefficient": [2.7355456e-07] * 4, # 0.016 × 1.709716e-05
+        "reaction_moment_coefficient": [2.7355456e-07] * 4, # 0.016 × 1.709716e-05
         "rot_dir": [-1, -1, 1, 1],
         "min_rotor_velocity": [0, 0, 0, 0],
         "max_rotor_velocity": [1400, 1400, 1400, 1400],
@@ -1134,7 +1134,7 @@ def make_shuttle_glider_cfg2():
         "shuttle_thrust_cfg": {
             "num_rotors": 4,
             "rotor_constant": [1.709716e-05] * 4,
-            "rolling_moment_coefficient": [2.7355456e-07] * 4, # 0.016 × 1.709716e-05
+            "reaction_moment_coefficient": [2.7355456e-07] * 4, # 0.016 × 1.709716e-05
             "rot_dir": [-1, -1, 1, 1],
             "min_rotor_velocity": [0, 0, 0, 0],
             "max_rotor_velocity": [1400, 1400, 1400, 1400],
@@ -1144,7 +1144,7 @@ def make_shuttle_glider_cfg2():
         
         "glider_thrust_cfg": {
             "rotor_constant": [8.54858e-6],
-            "rolling_moment_coefficient": [1.0258e-7], # 0.012 * 8.5e-6
+            "reaction_moment_coefficient": [1.0258e-7], # 0.012 * 8.5e-6
             "rot_dir": [-1.0],
             "min_rotor_velocity": 0.0,
             "max_rotor_velocity": 3500.0,

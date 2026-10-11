@@ -70,6 +70,11 @@ class TensorContracts(unittest.TestCase):
         definitions(Path('thrusters/glider_thrust_curve_batch.py'), ['GliderThrustCurveBatch'], self.ns)
         definitions(Path('vehicles/shuttle_glider_batch2.py'), ['_CombinedRotorInterface'], self.ns)
 
+        with self.assertRaisesRegex(ValueError, 'reaction_moment_coefficient'):
+            self.ns['QuadraticThrustCurveBatch']({
+                'rolling_moment_coefficient': [3.504e-7] * 4,
+            }, n_vehicles=2)
+
         shuttle = self.ns['QuadraticThrustCurveBatch'](config={
             'motor_time_constant_up': 0.0,
             'motor_time_constant_down': 0.0,

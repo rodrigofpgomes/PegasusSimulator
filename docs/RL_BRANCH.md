@@ -25,6 +25,9 @@ The batched thrust models use `rotor_constant`, `reaction_moment_coefficient`,
 `vehicle_final` task configurations were migrated to these keys. For variants that
 used `moment_constant` and `thrust_constant`, the reaction coefficient retains the
 previous relation `moment_constant * thrust_constant`.
+The `play_multi.py` vehicle profiles use `reaction_moment_coefficient` as well;
+the batched shuttle thrust curve rejects `rolling_moment_coefficient` to avoid silently
+loading its default coefficient.
 
 ## Validation and scope
 

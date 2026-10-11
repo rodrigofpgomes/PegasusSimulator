@@ -31,6 +31,13 @@ class QuadraticThrustCurveBatch(ThrustCurve):
             >>>  "motor_time_constant_down": 0.025,
             >>> }
         """
+        # Prevent old configurations from silently using the default reaction coefficient
+        if "rolling_moment_coefficient" in config:
+            raise ValueError(
+                "rolling_moment_coefficient is no longer supported by the batched thrust curve. "
+                "Use reaction_moment_coefficient instead."
+            )
+
         # Set device
         self.device = device
 
