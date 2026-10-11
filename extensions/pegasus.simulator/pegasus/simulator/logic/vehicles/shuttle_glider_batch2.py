@@ -97,6 +97,7 @@ class _CombinedRotorInterface:
         self.max_rotor_velocity = torch.cat((self._shuttle.max_rotor_velocity.reshape(-1), self._glider.max_rotor_velocity.reshape(-1))).to(device=self.device, dtype=torch.float32)
 
         # Create the combined rotor state tensors for the five-rotor view
+        self._input_reference = torch.zeros((self.n_vehicles, self._num_rotors), dtype=torch.float32, device=self.device)
         self._velocity = torch.zeros((self.n_vehicles, self._num_rotors), dtype=torch.float32, device=self.device)
         self._force = torch.zeros((self.n_vehicles, self._num_rotors), dtype=torch.float32, device=self.device)
 
@@ -122,14 +123,20 @@ class _CombinedRotorInterface:
         self._rot_dir = torch.cat((self._shuttle._rot_dir.reshape(-1).to(dtype=torch.float32), self._glider.rot_dir.reshape(-1))).to(device=self.device, dtype=torch.float32)
 
     def sync_to_models(self) -> None:
-        """Push reset/current rotor velocities into the two physical models."""
+        """Push reset rotor references and velocities into the physical models."""
+        self._shuttle._input_reference = self._input_reference[:, :4].clone()
+        self._glider._input_reference = self._input_reference[:, 4:5].clone()
         self._shuttle._velocity = self._velocity[:, :4].clone()
         self._glider._velocity = self._velocity[:, 4:5].clone()
 
     def sync_from_models(self) -> None:
         """Pull physical-model rotor states into the five-rotor RL view."""
+        self._input_reference[:, :4] = self._shuttle._input_reference
+        self._input_reference[:, 4:5] = self._glider._input_reference
         self._velocity[:, :4] = self._shuttle._velocity
         self._velocity[:, 4:5] = self._glider._velocity
+        self._force[:, :4] = self._shuttle._force
+        self._force[:, 4:5] = self._glider._force
 
     @property
     def velocity(self) -> torch.Tensor:

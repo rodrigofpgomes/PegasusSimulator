@@ -15,7 +15,9 @@ small, focused changes.
 
 The four shuttle rotors and the puller use separate thrust models. The combined
 five-rotor interface supplies velocity limits and rotor state to the RL backend and
-reset logic. Longitudinal trim also reads the five thrust coefficients and rotor
+reset logic. It synchronizes reset references and velocities into both physical
+models and exposes their current references, velocities, and forces to RL code.
+Longitudinal trim also reads the five thrust coefficients and rotor
 positions in the body frame.
 
 The batched thrust models use `rotor_constant`, `reaction_moment_coefficient`,
@@ -29,7 +31,8 @@ previous relation `moment_constant * thrust_constant`.
 - Python syntax was checked for the changed vehicle modules and seven task files.
 - All seven final task configurations instantiated and updated both batched thrust
   models in a CPU check.
-- The three CPU checks in `tests/review/test_torch_contracts.py` passed.
+- The four CPU checks in `tests/review/test_torch_contracts.py` passed, including
+  a reset and motor-update check for the combined rotor interface.
 - An Isaac Sim or SITL run has not yet been performed for this branch.
 - Training logs, checkpoints, recovered snapshots, and backup copies were excluded
   from the initial import. Historical tasks with five-action contracts still need a

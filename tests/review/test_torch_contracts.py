@@ -62,6 +62,44 @@ class TensorContracts(unittest.TestCase):
         self.assertTrue((vehicle._root_prims.pos[[0,2]]==0).all())
         self.assertTrue((vehicle._root_prims.vel[[0,2]]==0).all())
 
+    def test_combined_rotors_keep_reset_and_physical_states_in_sync(self):
+        self.ns['State'] = object
+        self.ns['ThrustCurve'] = object
+        self.ns['Sequence'] = list
+        definitions(Path('thrusters/quadratic_thrust_curve_batch.py'), ['QuadraticThrustCurveBatch'], self.ns)
+        definitions(Path('thrusters/glider_thrust_curve_batch.py'), ['GliderThrustCurveBatch'], self.ns)
+        definitions(Path('vehicles/shuttle_glider_batch2.py'), ['_CombinedRotorInterface'], self.ns)
+
+        shuttle = self.ns['QuadraticThrustCurveBatch'](config={
+            'motor_time_constant_up': 0.0,
+            'motor_time_constant_down': 0.0,
+        }, n_vehicles=2)
+        glider = self.ns['GliderThrustCurveBatch'](config={
+            'motor_time_constant_up': 0.0,
+            'motor_time_constant_down': 0.0,
+        }, n_vehicles=2)
+        combined = self.ns['_CombinedRotorInterface'](shuttle, glider, 2, 'cpu')
+
+        reset_velocity = torch.tensor([[100., 200., 300., 400., 500.],
+                                       [600., 700., 800., 900., 1000.]])
+        combined._velocity[:] = reset_velocity
+        combined._input_reference[:] = reset_velocity
+        combined.sync_to_models()
+        torch.testing.assert_close(shuttle._velocity, reset_velocity[:, :4])
+        torch.testing.assert_close(glider._input_reference, reset_velocity[:, 4:5])
+
+        command = reset_velocity + 10.0
+        shuttle.set_input_reference(command[:, :4])
+        glider.set_input_reference(command[:, 4:5])
+        shuttle.update(None, 0.01)
+        glider.update(None, 0.01)
+        combined.sync_from_models()
+
+        torch.testing.assert_close(combined._input_reference, command)
+        torch.testing.assert_close(combined._velocity, command)
+        torch.testing.assert_close(combined._force,
+                                   torch.cat((shuttle.force, glider.force), dim=1))
+
     def test_longitudinal_trim_force_and_pitch_balance(self):
         definitions(Path('dynamics/glider_aerodynamics.py'),['GliderGeometry','GliderCoefficients','CL_CD'],self.ns)
         spec=importlib.util.spec_from_file_location('aligned_trim',ROOT/'rl/aligned_trim.py')
