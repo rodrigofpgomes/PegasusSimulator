@@ -12,8 +12,8 @@
 | by an injected single-propeller thrust model.
 """
 
+# Standard library imports
 from __future__ import annotations
-
 from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
@@ -41,7 +41,7 @@ InputMode = Literal["rotor_velocity_direct", "forces_torques"]
 # =============================================================================
 
 class GliderBatchConfig:
-    """ Class used to configure a GliderBatch vehicle. """
+    """Configuration for the batched EasyGlider vehicle."""
 
     def __init__(
         self,
@@ -69,25 +69,23 @@ class GliderBatchConfig:
         # The USD file that describes the visual appearance of the vehicle, as well as properties such as mass and inertia
         self.usd_file = ""
         
-        # Default thrust curve and aerodynamic model for the batched gliders
+        # One puller rotor supplies thrust along the body X-axis
         self.thrust_curve = GliderThrustCurveBatch(
             config=dict(thrust_curve_cfg or {}),
             n_vehicles=n_vehicles,
             device=self.device,
         )
 
+        # The standalone USDA places /body at the aerodynamic reference origin
         aero_cfg = dict(aerodynamics_cfg or {})
         geometry = dict(aero_cfg.get("geometry", {}))
-
-        # The standalone EasyGlider USDA places /body at its aerodynamic reference origin
         geometry.setdefault("r_origin", (0.0, 0.0, 0.0))
         geometry.setdefault("r_com", (0.0, 0.0, 0.0))
         aero_cfg["geometry"] = geometry
 
         self.aerodynamics = GliderAerodynamicsBatch(config=aero_cfg, n_vehicles=n_vehicles, device=self.device)
 
-        # Default onboard sensors for the batched gliders.
-        # These are currently disabled until batch sensor support is enabled.
+        # Optional onboard sensors; batch sensors are disabled by default
         self.sensors = tuple(sensors or ())
 
         # Default graphical sensors for the batched gliders
@@ -96,19 +94,19 @@ class GliderBatchConfig:
         # Default OmniGraph graphs for the batched gliders
         self.graphs = tuple(graphs or ())
 
-        # Backends used to send commands to the batched vehicles.
-        # This can be a PX4, ROS 2, or custom backend implementation, or an empty list if no backend is required.
+        # The first backend supplies commands when no direct command is active
         self.backends = tuple(backends or ())
 
         # Name of the puller rotor prim in the USD file
         self.propeller_prim_name = str(propeller_prim_name)
 
+        # Normalize the thrust direction expressed in the /body frame
         axis = torch.as_tensor(propeller_axis_body, dtype=torch.float32, device=self.device)
         if axis.shape != (3,) or float(torch.linalg.vector_norm(axis)) <= 1e-9:
             raise ValueError("propeller_axis_body must be a nonzero three-component vector")
         
-        # Save the propeller axis in the body frame as a normalized torch tensor.
         self.propeller_axis_body = axis / torch.linalg.vector_norm(axis)
+
 
 # =============================================================================
 # Vehicle
@@ -134,10 +132,12 @@ class GliderBatch(VehicleBatch):
         spacing: float = 3.0,
         config: GliderBatchConfig | None = None,
     ) -> None:
-        """Initialize the batched EasyGlider and its four-channel input."""
+        """Initialize the vehicle models, control state and per-vehicle buffers."""
+
         if config is None:
             config = GliderBatchConfig(n_vehicles=n_vehicles)
 
+        # Initialize the shared VehicleBatch interface and backend connections
         super().__init__(
             stage_prefix,
             vehicle_batch_id,
@@ -152,26 +152,34 @@ class GliderBatch(VehicleBatch):
             spacing,
         )
 
+        # Use separate models for the wing aerodynamics and nose propeller
         self._aerodynamics = config.aerodynamics
         self._thrusters = config.thrust_curve
 
+        # The rotor prim receives thrust; the body receives the reaction moment
         self._propeller_prim_name = config.propeller_prim_name
         self._propeller_axis_body = config.propeller_axis_body.to(
             device=self.device, dtype=torch.float32
         )
 
+        # The first input is rotor speed, followed by the three surface angles
         self._input_mode: InputMode = "rotor_velocity_direct"
         self.actuator_dim = 4
 
+        # Resolve the rotor prim and allocate load buffers in start()
         self._propeller_index: int | None = None
         self._forces: torch.Tensor | None = None
         self._torques: torch.Tensor | None = None
 
-        # A direct command can be used for standalone runs without an RL backend
+        # Direct commands can override the first backend for selected vehicles
         self._actuator_reference = torch.zeros((self.n_vehicles, 4), dtype=torch.float32, device=self.device)
         self._direct_reference_mask = torch.zeros(self.n_vehicles, dtype=torch.bool, device=self.device)
+
+        # Store the latest aerodynamic inputs and outputs for observation/logging
         self._surface_deflections = torch.zeros((self.n_vehicles, 3), dtype=torch.float32, device=self.device)
         self._aero_wrench_local = None
+
+        # Optional airborne reset conditions and world-frame wind velocity
         self._flight_reset = None
         self._wind_world = torch.zeros((self.n_vehicles, 3), device=self.device)
 
@@ -180,12 +188,15 @@ class GliderBatch(VehicleBatch):
     # =============================================================================
 
     def start(self) -> None:
-        """Initialize prim views, resolve the propeller prim and allocate buffers."""
+        """Initialize prim views, find the propeller and allocate load buffers."""
         
+        # Build the batched rigid-body view and state from the vehicle USDA
         self.initialize()
 
+        # Locate the nose propeller within each vehicle's rigid prim layout
         self._resolve_propeller_index()
 
+        # One force and torque vector is stored for every rigid prim
         self._forces = torch.zeros(
             (self.n_vehicles, self.parts_per_vehicle, 3),
             dtype=torch.float32,
@@ -193,7 +204,7 @@ class GliderBatch(VehicleBatch):
         )
         self._torques = torch.zeros_like(self._forces)
 
-        # Optional model-specific initialization hook.
+        # Initialize models that implement an optional vehicle-specific hook
         for model in (self._aerodynamics, self._thrusters):
             initialize = getattr(model, "initialize", None)
             if callable(initialize):
@@ -208,10 +219,13 @@ class GliderBatch(VehicleBatch):
     # =============================================================================
 
     def _resolve_propeller_index(self) -> None:
-        """Resolve the rigid-prim index of the Glider nose propeller."""
+        """Resolve the nose propeller's rigid-prim index from the first vehicle."""
+
+        # All vehicles in the batch use the same ordering of rigid prims
         first_vehicle_paths = self._vehicle_prims.prim_paths[: self.parts_per_vehicle]
         path_name_to_index = {path.rsplit("/", 1)[-1]: index for index, path in enumerate(first_vehicle_paths)}
 
+        # The configured propeller must be a distinct rigid prim from /body
         if self._propeller_prim_name not in path_name_to_index:
             raise RuntimeError(
                 f"Propeller prim '{self._propeller_prim_name}' not found under "
@@ -230,11 +244,10 @@ class GliderBatch(VehicleBatch):
 
     def _format_actuator_reference(self, reference) -> torch.Tensor:
         """
-        Format actuator command as:
+        Return a separate four-channel command for each vehicle.
 
-            [Omega_p, delta_e, delta_a, delta_r]
-
-        with shape (n_vehicles, 4).
+        A single [Omega_p, delta_e, delta_a, delta_r] command is shared across
+        the batch; a (n_vehicles, 4) input supplies individual commands.
         """
 
         command = torch.as_tensor(
@@ -243,7 +256,7 @@ class GliderBatch(VehicleBatch):
             device=self.device,
         )
 
-        # Single vehicle command: [Omega, de, da, dr]
+        # Add a batch dimension to a single four-channel command
         if command.ndim == 1:
             if command.shape != (4,):
                 raise ValueError(
@@ -253,14 +266,14 @@ class GliderBatch(VehicleBatch):
 
             command = command.unsqueeze(0)
 
-        # Must now be (N, 4)
+        # The remaining dimension must contain exactly four actuators
         if command.ndim != 2 or command.shape[1] != 4:
             raise ValueError(
                 "Actuator reference must have shape (4,) or "
                 f"({self.n_vehicles}, 4), got {tuple(command.shape)}."
             )
 
-        # Broadcast one command to all vehicles
+        # Expand a shared command, or keep the per-vehicle command unchanged
         if command.shape[0] == 1 and self.n_vehicles > 1:
             command = command.expand(
                 self.n_vehicles,
@@ -283,74 +296,140 @@ class GliderBatch(VehicleBatch):
             actuator_reference: [Omega_p, delta_e, delta_a, delta_r] with
                 shape (4,) or (n_vehicles, 4).
         """
+        # Store the command and select it for every vehicle in the batch
         self._actuator_reference = self._format_actuator_reference(actuator_reference)
         self._direct_reference_mask[:] = True
 
-    def configure_flight_reset(self, positions, orientations, air_velocity_body, minimum_airspeed, actuator_reference, wind_world=(0.0, 0.0, 0.0)):
-        """Configure persistent airborne initial conditions for full and partial resets.
+    # =============================================================================
+    # Airborne reset
+    # =============================================================================
+
+    def configure_flight_reset(
+        self,
+        positions,
+        orientations,
+        air_velocity_body,
+        minimum_airspeed,
+        actuator_reference,
+        wind_world=(0.0, 0.0, 0.0),
+    ) -> None:
+        """Store the flight conditions used by full and partial airborne resets.
 
         Args:
-            positions: World ENU positions [m], one per instance, above the terrain.
-            orientations: Body-to-world unit quaternions [w,x,y,z].
-            air_velocity_body: Air-relative FLU velocity [m/s], including intended angle of attack.
-            minimum_airspeed: Positive regime-specific bound [m/s]; supplied by the caller, not a stall estimate.
-            actuator_reference: [puller, elevator, aileron, rudder] in rad/s and rad.
-            wind_world: Wind velocity in world ENU [m/s].
+            positions: Initial positions in world ENU coordinates [m].
+            orientations: Body-to-world quaternions [w, x, y, z].
+            air_velocity_body: Air-relative velocities in body FLU coordinates [m/s].
+            minimum_airspeed: Minimum airspeed for the selected flight regime [m/s].
+            actuator_reference: [Omega_p, delta_e, delta_a, delta_r].
+            wind_world: Wind velocities in world ENU coordinates [m/s].
         """
+
         def batch(value, width):
+            """Expand one vector or copy one vector per vehicle to the simulator device."""
             tensor = torch.as_tensor(value, dtype=torch.float32, device=self.device)
+
             if tensor.shape == (width,):
                 tensor = tensor.expand(self.n_vehicles, -1)
+
             if tensor.shape != (self.n_vehicles, width) or not torch.isfinite(tensor).all():
                 raise ValueError(f"Expected finite ({self.n_vehicles}, {width}) initial data")
+
             return tensor.clone()
+
+        # Store world positions and normalize the body-to-world orientations
         pos = batch(positions, 3)
         ori = batch(orientations, 4)
         norm = torch.linalg.vector_norm(ori, dim=-1, keepdim=True)
+
         if (norm < 1e-6).any():
             raise ValueError("Initial attitude quaternion must be nonzero")
+
         ori /= norm
+
+        # Keep air-relative velocity in the body frame until reset_in_flight()
         air = batch(air_velocity_body, 3)
+
         if minimum_airspeed <= 0 or (torch.linalg.vector_norm(air, dim=-1) < minimum_airspeed).any():
             raise ValueError("Air-relative initial velocity is below the configured regime bound")
+
+        # The first command component is the puller speed in rad/s
         cmd = self._format_actuator_reference(actuator_reference)
-        if not torch.isfinite(cmd).all() or (cmd[:, 0] < self._thrusters.min_rotor_velocity).any() or (cmd[:, 0] > self._thrusters.max_rotor_velocity).any():
+
+        if (
+            not torch.isfinite(cmd).all()
+            or (cmd[:, 0] < self._thrusters.min_rotor_velocity).any()
+            or (cmd[:, 0] > self._thrusters.max_rotor_velocity).any()
+        ):
             raise ValueError("Invalid initial actuator command or puller limit exceeded")
+
+        # Wind is stored in world coordinates and added to the air velocity at reset
         self._wind_world = batch(wind_world, 3)
         self._flight_reset = (pos, ori, air, cmd)
 
-    def reset_in_flight(self, env_ids=None):
-        """Restore configured flight conditions without changing other instances."""
+    def reset_in_flight(self, env_ids=None) -> None:
+        """Apply stored airborne conditions to the selected vehicles."""
         from pegasus.simulator.logic.rl.reset_manager import ResetManager
+
         if self._flight_reset is None:
             raise RuntimeError("Call configure_flight_reset with an explicit airspeed bound and trim first")
-        ids = torch.arange(self.n_vehicles, device=self.device) if env_ids is None else env_ids.to(device=self.device, dtype=torch.long)
+
+        # Reset every vehicle when no subset of environment IDs is supplied
+        ids = (
+            torch.arange(self.n_vehicles, device=self.device)
+            if env_ids is None
+            else env_ids.to(device=self.device, dtype=torch.long)
+        )
+
         pos, ori, air, cmd = self._flight_reset
+
+        # PhysX receives ground velocity in world coordinates: rotate the
+        # body-frame air velocity and add the world-frame wind velocity
         ground_velocity = quaternion_apply(ori[ids], air[ids]) + self._wind_world[ids]
+
+        # ResetManager accepts the rotor command normalized to [-1, 1]
         minimum = self._thrusters.min_rotor_velocity
         span = self._thrusters.max_rotor_velocity - minimum
         rotor_norm = 2.0 * (cmd[ids, 0:1] - minimum) / span - 1.0
-        ResetManager([self], device=self.device).reset_envs(ids, init_overrides={
-            "position_offset": pos[ids] - self._init_pos[ids], "orientations": ori[ids],
-            "linear_velocity": ground_velocity, "rotor_norm": rotor_norm})
+
+        # Position overrides are offsets relative to the vehicle spawn positions
+        ResetManager([self], device=self.device).reset_envs(
+            ids,
+            init_overrides={
+                "position_offset": pos[ids] - self._init_pos[ids],
+                "orientations": ori[ids],
+                "linear_velocity": ground_velocity,
+                "rotor_norm": rotor_norm,
+            },
+        )
+
+        # Hold the requested four-channel command for the reset vehicles
         self._actuator_reference[ids] = cmd[ids]
         self._direct_reference_mask[ids] = True
-        self._aerodynamics.set_wind_body(quaternion_apply(quaternion_invert(self.state.attitude), self._wind_world))
+
+        # Convert world wind to each vehicle's current body frame for aerodynamics
+        wind_body = quaternion_apply(quaternion_invert(self.state.attitude), self._wind_world)
+        self._aerodynamics.set_wind_body(wind_body)
 
     def clear_actuator_reference(self, env_ids: torch.Tensor | None = None) -> None:
         """Return command authority to the first backend for selected vehicles."""
+
         if env_ids is None:
+            # Release the direct command for every vehicle
             self._direct_reference_mask.zero_()
+
             if not self._backends:
                 self._actuator_reference.zero_()
+
         else:
+            # Release only the selected environments after a partial reset
             self._direct_reference_mask[env_ids] = False
+
             if not self._backends:
                 self._actuator_reference[env_ids] = 0.0
 
 
     # =============================================================================
-    # Physics update
+    # Physics
     # =============================================================================
 
     def update(self, dt: float) -> None:
@@ -364,19 +443,24 @@ class GliderBatch(VehicleBatch):
         Args:
             dt (float): Time since the previous physics step, in seconds.
         """
+
         if self._sim_running is False:
             return
 
+        # Give every backend the current physics time step
         for backend in self._backends:
             backend.update(dt)
 
+        # Buffers are allocated by start() after the rigid prims are available
         if self._forces is None or self._torques is None:
             return
 
+        # Reuse the per-part buffers; each step starts with zero applied load
         self._forces.zero_()
         self._torques.zero_()
         self._aero_wrench_local = None
 
+        # The backend can supply per-part loads directly in forces_torques mode
         if self._input_mode == "forces_torques":
             if not self._backends:
                 return
@@ -388,17 +472,23 @@ class GliderBatch(VehicleBatch):
             self._forces.copy_(torch.as_tensor(forces, dtype=torch.float32, device=self.device))
             self._torques.copy_(torch.as_tensor(torques, dtype=torch.float32, device=self.device))
 
+        # In rotor velocity mode, split the puller speed from surface angles
         else:
             command = self._get_actuator_reference()
             omega_p = command[:, 0:1]
-            delta = command[:, 1:4]         # [de, da, dr]
+            delta = command[:, 1:4]
             self._surface_deflections.copy_(delta)
 
             # --------------------------------------------------------------
             # Aerodynamics
             # --------------------------------------------------------------
+
+            # The aerodynamic model uses body-frame wind after an airborne reset
             if self._flight_reset is not None:
-                self._aerodynamics.set_wind_body(quaternion_apply(quaternion_invert(self._state.attitude), self._wind_world))
+                wind_body = quaternion_apply(quaternion_invert(self._state.attitude), self._wind_world)
+                self._aerodynamics.set_wind_body(wind_body)
+
+            # Pass the three surface angles to the aerodynamic model
             aero_force, aero_torque = self._aerodynamics.update(self._state, delta, dt)
 
             aero_force = torch.as_tensor(aero_force, dtype=torch.float32, device=self.device)
@@ -412,34 +502,40 @@ class GliderBatch(VehicleBatch):
             # --------------------------------------------------------------
             # Nose propeller
             # --------------------------------------------------------------
+
+            # Update the motor state from the requested angular velocity
             self._thrusters.set_input_reference(omega_p)
             thrust, _, reaction_moment = self._thrusters.update(self._state, dt)
 
             thrust = torch.as_tensor(thrust, dtype=torch.float32, device=self.device)
             reaction_moment = torch.as_tensor(reaction_moment, dtype=torch.float32, device=self.device)
 
+            # Fetch the body and rotor orientations for every vehicle
             _, part_attitudes = self._vehicle_prims.get_world_poses()
-
-            part_attitudes = torch.as_tensor(part_attitudes, dtype=torch.float32, device=self.device).reshape(self.n_vehicles, self.parts_per_vehicle, 4)
+            part_attitudes = torch.as_tensor(part_attitudes, dtype=torch.float32, device=self.device).reshape(
+                self.n_vehicles, self.parts_per_vehicle, 4
+            )
             body_attitude = part_attitudes[:, self.body_index, :]
             rotor_attitude = part_attitudes[:, self._propeller_index, :]
 
+            # The configured thrust axis is expressed in the body frame
             axis_body = self._propeller_axis_body.unsqueeze(0).expand(self.n_vehicles, -1)
 
-            # +x_B expressed in world
+            # Rotate the physical axis from body to world coordinates
             axis_world = quaternion_apply(body_attitude, axis_body)
 
-            # Same physical direction expressed in rotor-local coordinates
+            # Express that same axis in the rotor prim's local coordinates;
+            # VehicleBatch applies forces with is_global=False
             axis_rotor = quaternion_apply(quaternion_invert(rotor_attitude), axis_world)
 
-            # Apply the puller thrust at the physical propeller rigid prim. 
+            # Thrust acts at the rotor prim, including its physical offset from /body
             prop_force_rotor = thrust * axis_rotor
             self._forces[:, self._propeller_index, :] += prop_force_rotor
 
-            # The scalar reaction moment acts along the puller axis in body coordinates
+            # The motor reaction moment acts about the puller axis on /body
             self._torques[:, self.body_index, :] += reaction_moment.unsqueeze(-1) * axis_body
 
-        # If the first backend implements and returns external forces and torques, apply them to the vehicle batch.
+        # Add optional external disturbances returned by the first backend
         if self._backends and hasattr(self._backends[0], "external_forces_and_torques"):
             result = self._backends[0].external_forces_and_torques()
             
@@ -448,15 +544,18 @@ class GliderBatch(VehicleBatch):
                 self._forces += torch.as_tensor(external_forces, dtype=torch.float32, device=self.device)
                 self._torques += torch.as_tensor(external_torques, dtype=torch.float32, device=self.device)
 
+        # Apply all accumulated per-part loads in each rigid prim's local frame
         self.apply_forces_and_torques_all_parts(self._forces, self._torques)
 
 
     def _get_actuator_reference(self) -> torch.Tensor:
-        """Combine per-vehicle direct commands with the first backend command."""
+        """Select direct or backend command independently for each vehicle."""
+
         if not self._backends or self._direct_reference_mask.all():
-            # A backend is unnecessary when every vehicle has a direct command
+            # Direct commands cover every vehicle, or no backend exists
             return self._actuator_reference
 
+        # Read the first backend once and retain direct commands for masked rows
         reference = self._format_actuator_reference(self._backends[0].input_reference())
         self._actuator_reference = torch.where(
             self._direct_reference_mask.unsqueeze(-1),
@@ -466,21 +565,26 @@ class GliderBatch(VehicleBatch):
         return self._actuator_reference
 
     # =============================================================================
-    # Public helpers
+    # Utilities
     # =============================================================================
 
     def set_input_mode(self, input_mode: InputMode) -> None:
         """
-        Set the Glider command mode. Supported modes are:
+        Select how the first backend controls the vehicle.
 
-        "rotor_velocity_direct": Backend/direct command is '[Omega_p, delta_e, delta_a, delta_r]'.
-        "forces_torques": Backend directly supplies per-part forces and torques.
+        Args:
+            input_mode (str): "rotor_velocity_direct" for the four actuator
+                commands, or "forces_torques" for per-part loads.
         """
 
         if input_mode not in ("rotor_velocity_direct", "forces_torques"):
             raise ValueError("GliderBatch input_mode must be 'rotor_velocity_direct' or 'forces_torques'.")
         
         self._input_mode = input_mode
+
+    # =============================================================================
+    # Properties
+    # =============================================================================
 
     @property
     def actuator_reference(self) -> torch.Tensor:
