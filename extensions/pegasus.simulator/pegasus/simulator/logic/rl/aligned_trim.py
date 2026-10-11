@@ -8,8 +8,6 @@ import math
 import torch
 from pegasus.simulator.logic.transforms import quaternion_apply
 
-PHYSICS_REVISION = "aligned-com-review-v2"
-
 _TRIM_SPEED_KNOTS = (0.0, 2.0, 3.0, 3.5, 5.0, 7.0, 9.0, 10.0, 11.0, 12.0, 13.0)
 _TRIM_ALPHA_CAP_DEG = (0.0, 3.0, 3.0, 5.0, 7.0, 9.0, 11.0, 12.0, 8.0, 5.5, 3.5)
 
@@ -49,15 +47,10 @@ class AlignedTrimMixin:
     def _read_aero_and_thrust_constants(self):
         vehicle = self.backend._vehicle
 
-        self._rho = vehicle.aerodynamics.G.rho #1.2041
-        self._S = vehicle.aerodynamics.G.S #0.416
-        self._AR = vehicle.aerodynamics.G.AR # 1.8**2 / 0.416))
-        self._e = vehicle.aerodynamics.G.e #0.8523
+        self._rho = vehicle.aerodynamics.G.rho
+        self._S = vehicle.aerodynamics.G.S
         self._c = vehicle.aerodynamics.G.c
 
-        self._CL0 = vehicle.aerodynamics.C.CL0 #0.36986
-        self._CLa = vehicle.aerodynamics.C.CLa #3.679875
-        self._CD0 = vehicle.aerodynamics.C.CD0 #0.025
         self._CLde = vehicle.aerodynamics.C.CLde
         self._Cm0 = vehicle.aerodynamics.C.Cm0
         self._Cma = vehicle.aerodynamics.C.Cma
@@ -179,7 +172,3 @@ class AlignedTrimMixin:
         surface_trim = torch.zeros((V0.shape[0], 3), dtype=V0.dtype, device=self.device)
         surface_trim[:, 0] = delta_e
         return alpha_trim, surface_trim, rotor_norm
-
-    def _trim_rotor_norm(self, V0: torch.Tensor, alpha_trim: torch.Tensor) -> torch.Tensor:
-        """Compatibility wrapper; resets also need the returned alpha/elevator."""
-        return self._trim_from_speed(V0, alpha_trim)[2]

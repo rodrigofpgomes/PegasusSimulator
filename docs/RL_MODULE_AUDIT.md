@@ -35,6 +35,11 @@ The exact removed source remains available in Git history:
 git show 64a14a7:"extensions/pegasus.simulator/pegasus/simulator/logic/rl/reset_manager copy.py"
 ```
 
+`aligned_trim.py` remains active in the ShuttleGlider tasks. Its unused
+`_trim_rotor_norm()` compatibility method, unused cached coefficients and
+`PHYSICS_REVISION` constant were removed. The previous implementation is
+available in commit `aa2061c`.
+
 ## Reset lifecycle review
 
 `PegasusEnv.step()` advances physics, computes reward and termination, captures
@@ -94,6 +99,15 @@ discovery avoid loading the other training modules. The unused `skrl.config`
 import was also removed from SAC. The custom PPO2 and SAC update loops depend
 on skrl internals, so they remain unchanged until they can be checked against
 the version bundled with the training environment.
+
+## Trim and training export review
+
+The ShuttleGlider `vehicle_final` tasks call `AlignedTrimMixin` to compute
+physically feasible starting speed, elevator and rotor references. Its
+feasibility checks protect the force and pitch equilibrium, so they remain.
+`training_export.py` is called by all three training algorithms to record run
+metadata and export TensorBoard scalars. Its export failure handling preserves
+the original training exception, so the module remains active.
 
 ## Next review points
 
