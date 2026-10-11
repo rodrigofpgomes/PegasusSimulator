@@ -35,7 +35,7 @@ def _assert_finite(name, tensor):
 # =============================================================================
 
 class PPO2(PPO):
-    """PPO agent reproducing the RSL-RL PPO update using skrl infrastructure."""
+    """PPO agent with an RSL-RL-style update and Pegasus terminal handling."""
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
@@ -53,7 +53,11 @@ class PPO2(PPO):
     # =========================================================================
 
     def _update(self, timestep: int, timesteps: int) -> None:
-        """Performs one PPO update following the RSL-RL implementation."""
+        """Estimate advantages, then optimize policy and value minibatches.
+
+        The update uses one rollout permutation across learning epochs,
+        analytical Gaussian KL and an optional adaptive learning rate.
+        """
 
         # ---------------------------------------------------------------------
         # Generalized Advantage Estimation
@@ -96,7 +100,7 @@ class PPO2(PPO):
         _assert_finite("values", values)
         _assert_finite("last_values", last_values)
 
-        returns, advantages = compute_gae(rewards=self.memory.get_tensor_by_name("rewards"), dones=(self.memory.get_tensor_by_name("terminated") | self.memory.get_tensor_by_name("truncated")), values=values, last_values=last_values)
+        returns, advantages = compute_gae(rewards=rewards, dones=(self.memory.get_tensor_by_name("terminated") | self.memory.get_tensor_by_name("truncated")), values=values, last_values=last_values)
 
         _assert_finite("returns", returns)
         _assert_finite("advantages", advantages)
@@ -344,9 +348,9 @@ class PPO2(PPO):
 # =============================================================================
 
 def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True, checkpoint: str | None = None):
-    """Initializes the PPO2 agent, sets up logging, and starts the training loop."""
+    """Build and train PPO2, optionally restoring a full or teacher actor checkpoint."""
 
-    # Deferred imports to avoid early CUDA initialization conflicts with Isaac Sim
+    # Defer trainer and memory imports until after the launcher initializes Isaac Sim
     from skrl.memories.torch import RandomMemory
     from skrl.trainers.torch import SequentialTrainer
     from skrl.utils import set_seed
@@ -359,7 +363,7 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     # Environment Wrapping
     wrapped = PegasusSkrlWrapper(env)
 
-    # Model and Configuration Initialization
+    # Create policy and value models with the task's observation and action spaces
     models = agent_cfg["models"](wrapped.observation_space, wrapped.action_space, device)
     cfg = _prepare_cfg(agent_cfg["cfg"], device)
 
@@ -367,13 +371,13 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     if cfg.get("state_preprocessor") is not None:
         cfg["state_preprocessor_kwargs"]["size"] = wrapped.observation_space
 
-    # Rollout memory (on-policy core)    
+    # Keep on-policy transitions for each parallel vehicle
     memory = RandomMemory(memory_size=cfg["rollouts"], num_envs=wrapped.num_envs, device=device)
 
     # Set the base directory for skrl (it will create the timestamped folder inside this)
     cfg["experiment"]["directory"] = log_dir
 
-    # Agent Initialization
+    # PPO2 inherits PegasusPPO's physical terminal-state handling
     agent = PPO2(models=models, memory=memory, cfg=cfg, observation_space=wrapped.observation_space, action_space=wrapped.action_space, device=device)
 
     # Load checkpoint if provided
@@ -400,18 +404,8 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     _save_run_info(run_dir, cfg, models, agent_cfg)
     print(f"\n[PPO2] Logs and checkpoints will be saved to: {run_dir}\n")
 
-    # -------------------------------------------------------------------------
-    # RSL-RL: init_at_random_ep_len=True
-    # -------------------------------------------------------------------------
+    # Establish the initial task state before the trainer requests a reset
     wrapped.reset()
-
-    episode_length_buf = getattr(wrapped.unwrapped,"episode_length_buf", None)
-    max_episode_length = getattr(wrapped.unwrapped, "max_episode_length", None)
-
-    #if (isinstance(episode_length_buf, torch.Tensor) and max_episode_length is not None):
-    #    episode_length_buf[:] = torch.randint_like(episode_length_buf, high=int(max_episode_length))
-
-    #print("[PPO2] Initial episode lengths randomized (RSL-RL init_at_random_ep_len=True)")
 
     trainer_cfg = {"timesteps": agent_cfg["timesteps"], "headless": headless, "close_environment_at_exit": False, "environment_info": "log"}
     train_and_export(SequentialTrainer(cfg=trainer_cfg, env=wrapped, agents=agent), agent, run_dir,

@@ -108,6 +108,30 @@ The separate playback LQR controller also retains attitude-control logic.
 Checks protecting reset orientation and batch layout remain because invalid
 values would be passed directly to PhysX.
 
+## Algorithm and wrapper review
+
+`PegasusSkrlWrapper` converts the task's policy/action spaces to skrl tensors.
+It flattens both ordinary observations and `final_observation` with the same
+policy space, and exposes a separate critic state only when the task provides
+one. Its first reset is cached because PPO2 initializes the task before the
+trainer requests its own reset. Rendering and closing remain delegated so a
+future launcher can choose how to manage the environment lifecycle.
+
+`ppo.py` trains standard skrl PPO through `PegasusPPO`, which corrects timeout
+bootstrapping. `ppo2.py` keeps its RSL-RL-style minibatch and adaptive KL update
+as a separate algorithm. `sac.py` keeps its custom update for delayed actor
+steps, entropy learning, optional timeout bootstrapping and terminal-state
+replay, even when the configured delay is one. `transition_contract.py` supplies
+the physical final observation to both PPO variants and SAC. The algorithms
+write configuration metadata and use `training_export.py` to export scalar
+histories after training, including interrupted runs.
+
+The commented-out PPO2 episode-length randomization and its unused variables
+were removed. The active training and playback scripts currently select these
+algorithms and construct the backend; their setup can evolve independently of
+the task, transition and wrapper contracts described here. CPU contract tests
+do not execute skrl or Isaac Sim training.
+
 ## Terminal transition review
 
 `PegasusEnv.step()` captures `final_observation` before resetting completed

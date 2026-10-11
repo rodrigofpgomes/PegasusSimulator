@@ -9,7 +9,11 @@ from skrl.agents.torch.ppo import PPO
 
 
 def terminal_next_states(next_states, terminated, truncated, infos):
-    """Keep reset observations for interaction and physical final states for learning."""
+    """Replace autoreset rows with terminal states for replay or bootstrapping.
+
+    The environment returns the new episode's observation after reset. The
+    final observation in infos belongs to the completed transition instead.
+    """
     done = (terminated | truncated).view(-1)
     if not done.any():
         return next_states
@@ -27,9 +31,10 @@ def terminal_next_states(next_states, terminated, truncated, infos):
 
 
 class PegasusPPO(PPO):
-    """SKRL PPO with timeout value taken at s_terminal, after reward shaping."""
+    """SKRL PPO that bootstraps timeouts from the physical terminal state."""
     def record_transition(self, states, actions, rewards, next_states, terminated,
                           truncated, infos, timestep, timesteps):
+        """Correct next states and timeout values before storing the transition."""
         physical = terminal_next_states(next_states, terminated, truncated, infos)
         bootstrap, shaper = self._time_limit_bootstrap, self._rewards_shaper
         correction = torch.zeros_like(rewards)
@@ -38,7 +43,7 @@ class PegasusPPO(PPO):
                 values, _, _ = self.value.act({"states": self._state_preprocessor(physical)}, role="value")
                 values = self._value_preprocessor(values, inverse=True)
             correction = self._discount_factor * values * (truncated & ~terminated)
-        # SKRL 1.4.3 otherwise adds V(s_t), rather than V(s_terminal).
+        # Apply the correction after reward shaping; avoid skrl's own timeout term
         self._time_limit_bootstrap = False
         self._rewards_shaper = lambda r, t, ts: (shaper(r, t, ts) if shaper else r) + correction
         try:

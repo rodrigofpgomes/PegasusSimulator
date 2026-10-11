@@ -20,9 +20,9 @@ from pegasus.simulator.logic.rl.training_export import train_and_export, snapsho
 
 
 def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True, checkpoint: str | None = None):
-    """Initializes the SAC agent, sets up logging, and starts the training loop."""
+    """Train SAC with Pegasus terminal states and optional delayed actor updates."""
 
-    # Deferred imports to avoid early CUDA initialization conflicts with Isaac Sim
+    # Defer trainer, memory and agent imports until after Isaac Sim initializes
     from skrl.agents.torch.sac import SAC
     from skrl.trainers.torch import SequentialTrainer
     from skrl.memories.torch import RandomMemory
@@ -51,7 +51,7 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     # Set the base directory for skrl (it will create the timestamped folder inside this)
     cfg["experiment"]["directory"] = log_dir
 
-    # Apply the same transition/options contract for every delay, including one.
+    # Use one transition contract for every actor delay, including one
     policy_delay = cfg.pop("policy_delay", 1)
     AgentClass = _make_sac_with_delay(SAC, policy_delay)
 
@@ -95,7 +95,7 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
 # -------------------------------------------
 
 def _make_sac_with_delay(BaseSAC, policy_delay: int):
-    """Returns a SAC subclass that updates the actor only every `policy_delay` critic steps."""
+    """Return SAC with terminal-state replay and configurable actor frequency."""
 
     if isinstance(policy_delay, bool) or not isinstance(policy_delay, int) or policy_delay < 1:
         raise ValueError("policy_delay must be a positive integer")
@@ -126,14 +126,17 @@ def _make_sac_with_delay(BaseSAC, policy_delay: int):
 
         def record_transition(self, states, actions, rewards, next_states,
                             terminated, truncated, infos, timestep, timesteps) -> None:
-            
+            """Store the completed episode's physical final state in replay."""
             next_states = terminal_next_states(next_states, terminated, truncated, infos)
 
             super().record_transition(states, actions, rewards, next_states, terminated, truncated, infos, timestep, timesteps)
                                     
         def _update(self, timestep: int, timesteps: int) -> None:
-            """Performs the SAC gradient steps: critic update every step, actor + entropy
-            update only every ``policy_delay`` critic updates."""
+            """Update critics every step and actor/entropy every policy_delay steps.
+
+            Truncations bootstrap from their physical terminal state only when
+            bootstrap_timeouts is enabled in the agent configuration.
+            """
             for gradient_step in range(self._gradient_steps):
                 (
                     sampled_states,

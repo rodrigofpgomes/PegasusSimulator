@@ -15,7 +15,10 @@ from pegasus.simulator.logic.rl.training_export import train_and_export, snapsho
 
 
 def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True, checkpoint: str | None = None):
-    """Initializes the PPO agent, sets up logging, and starts the training loop."""
+    """Train standard skrl PPO with Pegasus terminal-transition handling.
+
+    Trainer and memory imports are deferred until the launcher calls train.
+    """
     
     # Deferred imports to avoid early CUDA initialization conflicts with Isaac Sim
     from pegasus.simulator.logic.rl.algorithms.transition_contract import PegasusPPO as PPO
@@ -29,7 +32,7 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
         set_seed(seed)
         print(f"[PPO] Seed set to: {seed}")
 
-    # Environment Wrapping
+    # Adapt task actions and policy observations to skrl spaces
     wrapped = PegasusSkrlWrapper(env)
 
     # Model and Configuration Initialization
@@ -40,13 +43,13 @@ def train(env, agent_cfg: dict, log_dir: str, device: str, headless: bool = True
     if cfg.get("state_preprocessor") is not None:
         cfg["state_preprocessor_kwargs"]["size"] = wrapped.observation_space
 
-    # Rollout memory (on-policy core)
+    # Store one on-policy rollout for each parallel environment
     memory = RandomMemory(memory_size=cfg["rollouts"], num_envs=wrapped.num_envs, device=device)
 
     # Set the base directory for skrl (it will create the timestamped folder inside this)
     cfg["experiment"]["directory"] = log_dir
 
-    # Agent Initialization
+    # PegasusPPO uses physical terminal observations for timeout bootstrapping
     agent = PPO(models=models, memory=memory, cfg=cfg, observation_space=wrapped.observation_space, action_space=wrapped.action_space, device=device)
 
     if checkpoint is not None:
