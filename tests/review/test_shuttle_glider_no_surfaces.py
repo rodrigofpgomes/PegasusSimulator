@@ -8,7 +8,7 @@ import unittest
 import torch
 
 
-SOURCE = Path(__file__).resolve().parents[2] / "examples/rl/tasks/shuttle_glider/no_surfaces/quadcopter_env.py"
+SOURCE = Path(__file__).resolve().parents[2] / "examples/rl/tasks/shuttle_glider/no_surfaces/raptor_tracking/quadcopter_env.py"
 
 
 class NoSurfaceActionContract(unittest.TestCase):

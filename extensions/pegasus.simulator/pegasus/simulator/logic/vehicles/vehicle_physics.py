@@ -27,8 +27,7 @@ IRIS_PHYSICS = {
     "motor_time_constant_down": 0.025,
 }
 
-# L2F Crazyflie parameters. The corresponding USD asset is not yet included
-# in this branch; the preset remains available for future asset integration.
+# L2F Crazyflie parameters used with the cf2x USDA asset.
 CRAZYFLIE_PHYSICS = {
     "num_rotors": 4,
     "rotor_constant": [2.8815744627880866e-8] * 4,

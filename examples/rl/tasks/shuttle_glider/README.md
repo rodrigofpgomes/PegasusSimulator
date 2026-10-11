@@ -1,10 +1,12 @@
 # ShuttleGlider experiments
 
-`no_surfaces/` is the first selected task. It uses five rotor actions, sends
-zero surface deflections and has no curriculum. It is adapted from
-`sg_f2_rep3` for a fresh training run with the shared ShuttleGlider physics.
+The action groups separate the effect of aerodynamic surface control:
 
-The next comparison should enable surface control without curriculum, then
-introduce curriculum while keeping the vehicle physics fixed. Record rotor
-and puller effort, surface angles, airspeed and aerodynamic loads across the
-flight regimes.
+| Group | Policy action | Experiments |
+| --- | --- | --- |
+| [`no_surfaces/`](no_surfaces/README.md) | Five rotor speeds; neutral elevator, aileron and rudder. | RAPTOR-style tracking without curriculum. |
+| [`surfaces/`](surfaces/README.md) | Five rotor speeds and three surface deflections. | Reward and curriculum ablations across flight regimes. |
+
+Both groups use the same ShuttleGlider motor preset. A named aerodynamic
+override remains in `reward_offload_custom_aero`; compare it separately from
+experiments using the default aerodynamic coefficients.

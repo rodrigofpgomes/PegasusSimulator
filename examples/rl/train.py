@@ -5,8 +5,8 @@
 | License: BSD-3-Clause.
 
 Usage:
-    python train.py --task quadcopter --algo ppo
-    python train.py --task quadcopter --algo ppo --seed 42 --n_envs 512 --headless
+    python train.py --task shuttle/double_integrator/01_isaac_lab --algo ppo
+    python train.py --task shuttle/direct_rotor/baseline/raptor_tracking --algo ppo --seed 42 --n_envs 512 --headless
 """
 
 import os
@@ -264,9 +264,17 @@ def main():
 
     # Cleanup
     timeline.stop()
+    backend._vehicle.close()
+    world.clear_instance()
 
 if __name__ == "__main__":
     try:
         main()
+    except BaseException:
+        import traceback
+        print("\n[TRAIN] Unhandled exception:", flush=True)
+        traceback.print_exc()
+        sys.stderr.flush()
+        raise
     finally:
         simulation_app.close()

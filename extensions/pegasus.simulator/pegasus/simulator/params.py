@@ -31,6 +31,7 @@ ROBOTS_ASSETS = ASSET_PATH + "/Robots"
 ROBOTS = {
     "Iris": ROBOTS_ASSETS + "/Iris/iris.usd",
     "Iris_White": ROBOTS_ASSETS + "/Iris/iris_white.usd",
+    "Crazyflie": ROBOTS_ASSETS + "/Crazyflie/cf2x.usda",
     "Shuttle": ROBOTS_ASSETS + "/Shuttle/shuttle.usda",
     "Easyglider": ROBOTS_ASSETS + "/Easyglider/easyglider.usda",
     "Shuttle_glider2": ROBOTS_ASSETS + "/Shuttle/shuttle_glider2.usda",
