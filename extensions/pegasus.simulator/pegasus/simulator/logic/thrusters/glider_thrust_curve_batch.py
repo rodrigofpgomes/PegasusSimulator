@@ -63,18 +63,21 @@ class GliderThrustCurveBatch(ThrustCurve):
         # Set the number of vehicles to construct batches of forces and velocities for each vehicle 
         self.n_vehicles = n_vehicles
 
+        # The glider has one puller rotor; RLBackend uses this count to size its commands
+        self._num_rotors = 1
+
         # The rotor constant used for computing the total thrust produced by the rotor: T = rotor_constant * omega^2
-        self._rotor_constant = torch.tensor(config.get("rotor_constant", [8.54858e-06]), dtype=torch.float32, device=self.device)
+        self._rotor_constant = torch.tensor(config.get("rotor_constant", [8.54858e-06]), dtype=torch.float32, device=self.device).reshape(-1)
 
         # The rotor constant used for computing the total torque generated about the vehicle X-axis
-        self._reaction_moment_coefficient = torch.tensor(config.get("reaction_moment_coefficient", [1.0258e-7]), dtype=torch.float32, device=self.device)
+        self._reaction_moment_coefficient = torch.tensor(config.get("reaction_moment_coefficient", [1.0258e-7]), dtype=torch.float32, device=self.device).reshape(-1)
 
         # Save the rotor direction of rotation
-        self._rot_dir = torch.tensor(config.get("rot_dir", [-1]), dtype=torch.int32, device=self.device)
+        self._rot_dir = torch.tensor(config.get("rot_dir", [-1]), dtype=torch.int32, device=self.device).reshape(-1)
 
         # Values for the minimum and maximum rotor velocity in rad/s
-        self.min_rotor_velocity = torch.tensor(config.get("min_rotor_velocity", 0), dtype=torch.float32, device=self.device)
-        self.max_rotor_velocity = torch.tensor(config.get("max_rotor_velocity", 3500.0), dtype=torch.float32, device=self.device)
+        self.min_rotor_velocity = torch.tensor(config.get("min_rotor_velocity", 0), dtype=torch.float32, device=self.device).reshape(-1)
+        self.max_rotor_velocity = torch.tensor(config.get("max_rotor_velocity", 3500.0), dtype=torch.float32, device=self.device).reshape(-1)
 
         # Motor time constants for acceleration and deceleration, in seconds
         self._motor_time_constant_up   = torch.tensor(config.get("motor_time_constant_up",   0.0125), dtype=torch.float32, device=self.device).reshape(1, -1)
@@ -127,7 +130,7 @@ class GliderThrustCurveBatch(ThrustCurve):
         """
 
         # Desired rotor velocity after clipping
-        target_velocity = torch.clamp(self._input_reference, min=float(self.min_rotor_velocity), max=float(self.max_rotor_velocity))
+        target_velocity = torch.clamp(self._input_reference, min=self.min_rotor_velocity, max=self.max_rotor_velocity)
 
         # First-order motor response:
         # dw/dt = (w_cmd - w) / tau
@@ -140,7 +143,7 @@ class GliderThrustCurveBatch(ThrustCurve):
         self._velocity = self._velocity + alpha * (target_velocity - self._velocity)
     
         # Safety clipping
-        self._velocity = torch.clamp(self._velocity, min=float(self.min_rotor_velocity), max=float(self.max_rotor_velocity))
+        self._velocity = torch.clamp(self._velocity, min=self.min_rotor_velocity, max=self.max_rotor_velocity)
         
         # Set the force using a quadratic thrust curve
         self._force = self._rotor_constant.unsqueeze(0) * torch.pow(self._velocity, 2)

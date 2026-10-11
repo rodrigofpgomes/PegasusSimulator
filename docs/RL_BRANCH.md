@@ -29,6 +29,21 @@ The `play_multi.py` vehicle profiles use `reaction_moment_coefficient` as well;
 the batched shuttle thrust curve rejects `rolling_moment_coefficient` to avoid silently
 loading its default coefficient.
 
+## EasyGlider control contract
+
+`GliderBatch` exposes four commands per vehicle:
+
+```text
+[Omega_p, delta_e, delta_a, delta_r]
+```
+
+The puller is the only rotor. Its thrust acts at the `rotor` prim, while the
+reaction moment acts along the configured puller axis on `/body`. The included
+`easyglider.usda` uses `/body` as the aerodynamic reference origin. Direct
+commands remain available for standalone runs and can override selected
+vehicles while the others follow the backend. No RL task for this vehicle is
+included yet.
+
 ## Validation and scope
 
 - Python syntax was checked for the changed vehicle modules and seven task files.
@@ -36,6 +51,8 @@ loading its default coefficient.
   models in a CPU check.
 - The four CPU checks in `tests/review/test_torch_contracts.py` passed, including
   a reset-velocity and motor-update check for the combined rotor interface.
+- The CPU Glider contract checks the four-channel command, propeller force,
+  reaction torque axis and per-vehicle direct command override.
 - An Isaac Sim or SITL run has not yet been performed for this branch.
 - `MultirotorBatch` currently updates its drag model without applying its force;
   its control allocation also assumes equal maximum speeds for all rotors.
