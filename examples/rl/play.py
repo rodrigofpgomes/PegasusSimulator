@@ -385,6 +385,9 @@ from pxr import PhysxSchema
 
 from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
 from pegasus.simulator.logic.vehicles.multirotor_batch import MultirotorBatch, MultirotorBatchConfig
+from pegasus.simulator.logic.vehicles.shuttle_glider_batch2 import ShuttleGliderBatch2, ShuttleGliderBatchConfig2
+from pegasus.simulator.logic.vehicles.glider_batch import GliderBatch, GliderBatchConfig
+from pegasus.simulator.logic.vehicles.vehicle_physics import get_vehicle_physics
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.rl import RLBackend, ResetManager
 
@@ -509,13 +512,26 @@ def main():
     # -----------------------------------------------------------------
     rl_backend = RLBackend(n_vehicles=n_envs, action_mode=env_cfg.action_mode)
 
-    physics_cfg = getattr(env_cfg, "vehicle_physics_cfg", None) or {}
-    vehicle_cfg = MultirotorBatchConfig(n_vehicles=n_envs)
+    # Recreate the same physical vehicle and task overrides used in training.
+    physics_cfg = getattr(env_cfg, "vehicle_physics_cfg", None)
+    if physics_cfg is None:
+        physics_cfg = get_vehicle_physics(env_cfg.vehicle)
+
+    if env_cfg.vehicle == "Shuttle_glider2":
+        vehicle_cfg = ShuttleGliderBatchConfig2(cfg=physics_cfg, n_vehicles=n_envs)
+        VehicleClass = ShuttleGliderBatch2
+    elif env_cfg.vehicle == "Easyglider":
+        vehicle_cfg = GliderBatchConfig(n_vehicles=n_envs, thrust_curve_cfg=physics_cfg)
+        VehicleClass = GliderBatch
+    else:
+        vehicle_cfg = MultirotorBatchConfig(cfg=physics_cfg, n_vehicles=n_envs)
+        VehicleClass = MultirotorBatch
+
     vehicle_cfg.backends = [rl_backend]
 
-    rl_vehicle = MultirotorBatch(
+    rl_vehicle = VehicleClass(
         stage_prefix="/World/rl_quadrotor",
-        usd_file=ROBOTS["Iris"],
+        usd_file=ROBOTS[env_cfg.vehicle],
         vehicle_batch_id=1,
         n_vehicles=n_envs,
         spacing=2.5,
@@ -531,7 +547,7 @@ def main():
     # -----------------------------------------------------------------
     lqr_vehicle = None
     lqr_backend = None
-    has_lqr = args.compare_lqr and hasattr(env, "_compute_discounted_dlqr")
+    has_lqr = args.compare_lqr and env_cfg.vehicle == "Iris" and hasattr(env, "_compute_discounted_dlqr")
 
     if has_lqr:
         LQRBackend = load_lqr_backend_class()
@@ -546,7 +562,7 @@ def main():
             action_mode="direct_force",
         )
 
-        lqr_cfg = MultirotorBatchConfig(n_vehicles=n_envs)
+        lqr_cfg = MultirotorBatchConfig(cfg=physics_cfg, n_vehicles=n_envs)
         lqr_cfg.backends = [lqr_backend]
 
         lqr_vehicle = MultirotorBatch(

@@ -22,6 +22,7 @@ import sys
 import csv
 import json
 import math
+from copy import deepcopy
 import argparse
 import importlib
 import importlib.util
@@ -1015,6 +1016,7 @@ from pxr import PhysxSchema
 from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
 from pegasus.simulator.logic.vehicles.multirotor_batch import MultirotorBatch, MultirotorBatchConfig
 from pegasus.simulator.logic.vehicles.shuttle_glider_batch2 import ShuttleGliderBatch2, ShuttleGliderBatchConfig2
+from pegasus.simulator.logic.vehicles.vehicle_physics import get_vehicle_physics
 from pegasus.simulator.logic.transforms import quaternion_to_matrix
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.rl import ResetManager, GoalCfg
@@ -1088,87 +1090,11 @@ def load_nonlinear_backend_class():
 
 
 
-def make_iris_cfg():
-    return {
-        "num_rotors": 4,
-        "rotor_constant": [5.84e-6] * 4,
-        "reaction_moment_coefficient": [3.504e-7] * 4, # 5.84e-06 * 0.06
-        "rot_dir": [-1, -1, 1, 1],
-        "min_rotor_velocity": [0.0, 0.0, 0.0, 0.0],
-        "max_rotor_velocity": [1100.0, 1100.0, 1100.0, 1100.0],
-        "motor_time_constant_up": 0.0125,
-        "motor_time_constant_down": 0.025,
-    }
-
-
-def make_crazyflie_cfg():
-    # L2F Crazyflie parameters (learning_to_fly/parameters/dynamics/crazy_flie.h).
-    return {
-        "num_rotors": 4,
-        "rotor_constant": [2.8815744627880866e-8] * 4,
-        "reaction_moment_coefficient": [1.7187300725171608e-10] * 4,
-        "rot_dir": [-1, 1, -1, 1],
-        "min_rotor_velocity": [0.0, 0.0, 0.0, 0.0],
-        "max_rotor_velocity": [2272.6281256068564, 2272.6281256068564, 2272.6281256068564, 2272.6281256068564],
-        "motor_time_constant_up": [0.15] * 4,
-        "motor_time_constant_down": [0.15] * 4,
-    }
-
-def make_shuttle_cfg():
-    # Shuttle real parameters (from Gazebo shuttle.sdf)
-    return {
-        "num_rotors": 4,
-        "rotor_constant": [1.709716e-05] * 4,
-        "reaction_moment_coefficient": [2.7355456e-07] * 4, # 0.016 × 1.709716e-05
-        "rot_dir": [-1, -1, 1, 1],
-        "min_rotor_velocity": [0, 0, 0, 0],
-        "max_rotor_velocity": [1400, 1400, 1400, 1400],
-        "motor_time_constant_up": [0.008] * 4, 
-        "motor_time_constant_down": [0.020] * 4,  
-    }
-
-
-def make_shuttle_glider_cfg2():
-    # Shuttle-Glider parameters (from Gazebo shuttle.sdf and easyglider.sdf)
-    return {
-        "shuttle_thrust_cfg": {
-            "num_rotors": 4,
-            "rotor_constant": [1.709716e-05] * 4,
-            "reaction_moment_coefficient": [2.7355456e-07] * 4, # 0.016 × 1.709716e-05
-            "rot_dir": [-1, -1, 1, 1],
-            "min_rotor_velocity": [0, 0, 0, 0],
-            "max_rotor_velocity": [1400, 1400, 1400, 1400],
-            "motor_time_constant_up": [0.008] * 4, 
-            "motor_time_constant_down": [0.020] * 4,  
-        },
-        
-        "glider_thrust_cfg": {
-            "rotor_constant": [8.54858e-6],
-            "reaction_moment_coefficient": [1.0258e-7], # 0.012 * 8.5e-6
-            "rot_dir": [-1.0],
-            "min_rotor_velocity": 0.0,
-            "max_rotor_velocity": 3500.0,
-            "motor_time_constant_up": 0.0125, 
-            "motor_time_constant_down": 0.025,
-        },
-
-        "aerodynamics_cfg": { } # EasyGlider Default, geometry + coefficients
-    }
-
 # ---------------------------------------------------------------------
 # Controller registry (manifest-driven instantiation)
 # ---------------------------------------------------------------------
-# Physical-vehicle key -> function returning its MultirotorBatch parameter dict.
-# Add new airframes here.
-VEHICLE_CFGS = {
-    "iris": make_iris_cfg,
-    "crazyflie": make_crazyflie_cfg,
-    "shuttle": make_shuttle_cfg,
-    "shuttle_glider2": make_shuttle_glider_cfg2,
-}
-
-# Physical-vehicle key -> USD asset key in ROBOTS. The same model is used for
-# every controller so that all instantiated vehicles are identical.
+# Physical-vehicle key -> asset and physics preset key. The selected task may
+# override the baseline physics; all controllers then share that exact override.
 VEHICLE_USD = {
     "iris": "Iris",
     "crazyflie": "Crazyflie",
@@ -1364,7 +1290,9 @@ def main():
         raise SystemExit(f"[config] unknown vehicle '{vehicle_choice}'; "
                          f"must be one of {sorted(VEHICLE_USD)}.")
     usd_key = VEHICLE_USD[vehicle_choice]
-    cfg_fn  = VEHICLE_CFGS[vehicle_choice]
+    if usd_key not in ROBOTS:
+        raise ValueError(f"No USD asset is registered for {usd_key}")
+    cfg_fn = lambda: get_vehicle_physics(usd_key)
     selected_physics = None
     for entry in manifest_vehicles:
         kind = entry["type"]
@@ -1383,12 +1311,14 @@ def main():
                 raise ValueError(f"Task vehicle {task_cfg.vehicle} differs from requested {usd_key}")
             if abs(task_cfg.sim_dt - physics_dt) > 1e-9:
                 raise ValueError("Evaluation physics dt differs from the task; control decimation alone is insufficient")
-            cfg = getattr(task_cfg, "vehicle_physics_cfg", None) or {}
+            cfg = getattr(task_cfg, "vehicle_physics_cfg", None)
+            if cfg is None:
+                cfg = get_vehicle_physics(usd_key)
             if selected_physics is not None and cfg != selected_physics:
                 raise ValueError("Controllers request different physics; evaluate these conditions in separate runs")
             selected_physics = cfg
     if selected_physics is not None:
-        cfg_fn = lambda: selected_physics
+        cfg_fn = lambda: deepcopy(selected_physics)
 
     print(f"[config] vehicle model for ALL controllers: {vehicle_choice} "
           f"(USD '{usd_key}')", flush=True)

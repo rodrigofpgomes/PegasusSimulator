@@ -98,6 +98,8 @@ from pxr import PhysxSchema
 from pegasus.simulator.params import ROBOTS, SIMULATION_ENVIRONMENTS
 from pegasus.simulator.logic.vehicles.multirotor_batch import MultirotorBatch, MultirotorBatchConfig
 from pegasus.simulator.logic.vehicles.shuttle_glider_batch2 import ShuttleGliderBatch2, ShuttleGliderBatchConfig2
+from pegasus.simulator.logic.vehicles.glider_batch import GliderBatch, GliderBatchConfig
+from pegasus.simulator.logic.vehicles.vehicle_physics import get_vehicle_physics
 from pegasus.simulator.logic.interface.pegasus_interface import PegasusInterface
 from pegasus.simulator.logic.rl import RLBackend, ResetManager, GoalCfg, InitStateCfg
 
@@ -193,11 +195,20 @@ def main():
 
     # Setup Vehicles
     backend = RLBackend(n_vehicles=n_envs, action_mode=env_cfg.action_mode, device=device)
-    physics_cfg = getattr(env_cfg, "vehicle_physics_cfg", None) or {}
+    # A task may record experimental physics; otherwise use the vehicle baseline.
+    physics_cfg = getattr(env_cfg, "vehicle_physics_cfg", None)
+    if physics_cfg is None:
+        physics_cfg = get_vehicle_physics(env_cfg.vehicle)
     
     if env_cfg.vehicle == "Shuttle_glider2":
         vehicle_cfg = ShuttleGliderBatchConfig2(cfg=physics_cfg, n_vehicles=n_envs)
         VehicleClass = ShuttleGliderBatch2
+    elif env_cfg.vehicle == "Easyglider":
+        vehicle_cfg = GliderBatchConfig(
+            n_vehicles=n_envs,
+            thrust_curve_cfg=physics_cfg,
+        )
+        VehicleClass = GliderBatch
     else:
         vehicle_cfg = MultirotorBatchConfig(
             cfg=physics_cfg,

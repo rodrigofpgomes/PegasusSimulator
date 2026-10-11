@@ -28,7 +28,13 @@ ASSET_PATH = ROOT + "/pegasus.simulator/pegasus/simulator/assets"
 ROBOTS_ASSETS = ASSET_PATH + "/Robots"
 
 # Define the built in robots of the extension
-ROBOTS = {"Iris": ROBOTS_ASSETS + "/Iris/iris.usd", "Iris_White": ROBOTS_ASSETS + "/Iris/iris_white.usd"}
+ROBOTS = {
+    "Iris": ROBOTS_ASSETS + "/Iris/iris.usd",
+    "Iris_White": ROBOTS_ASSETS + "/Iris/iris_white.usd",
+    "Shuttle": ROBOTS_ASSETS + "/Shuttle/shuttle.usda",
+    "Easyglider": ROBOTS_ASSETS + "/Easyglider/easyglider.usda",
+    "Shuttle_glider2": ROBOTS_ASSETS + "/Shuttle/shuttle_glider2.usda",
+}
 
 #, "Flying Cube": ROBOTS_ASSETS + "/iris_cube.usda"}
 
