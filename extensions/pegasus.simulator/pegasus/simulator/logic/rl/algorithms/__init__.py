@@ -1,13 +1,3 @@
-"""
-RL Algorithms
+"""RL training algorithms loaded by name from the training launcher."""
 
-Available algorithms:
-- ppo: Proximal Policy Optimization
-- sac: Soft Actor-Critic
-- td3: Twin Delayed DDPG (future)
-"""
-
-from . import ppo
-from . import sac
-
-__all__ = ["ppo", "sac"]
+__all__ = ["ppo", "ppo2", "sac"]

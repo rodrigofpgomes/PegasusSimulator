@@ -13,7 +13,6 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from skrl import config as skrl_config
 from pegasus.simulator.logic.rl.algorithms.transition_contract import terminal_next_states
 
 from pegasus.simulator.logic.rl.skrl_pegasus_wrapper import PegasusSkrlWrapper

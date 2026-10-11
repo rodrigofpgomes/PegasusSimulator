@@ -18,7 +18,7 @@ correctness.
 | `algorithms/ppo2.py` | Loaded by `train.py` for `--algo ppo2` and by playback; task presets exist. | Keep. |
 | `algorithms/sac.py` | Loaded by `train.py` for `--algo sac`; task presets exist. | Keep. |
 | `algorithms/transition_contract.py` | Supplies terminal observations and timeout bootstrapping to PPO, PPO2 and SAC. It has no `train()` function. | Keep as a helper, exclude from algorithm discovery. |
-| `algorithms/__init__.py` | Package entry point for algorithm imports. | Keep; review its eager imports and incomplete `__all__` during the algorithm pass. |
+| `algorithms/__init__.py` | Package entry point for algorithm imports. | Keep; load selected algorithms by name and export PPO, PPO2 and SAC. |
 | `reset_manager copy.py` | No imports or calls; superseded by `reset_manager.py`. | Remove from the working tree. |
 
 ## Logic retained for future use
@@ -84,6 +84,16 @@ task already resets completed rows during `step()`. Its later calls return the
 current observation. The unused `skrl.config` import was removed. `skrl` is
 not installed in this workspace, so the installed library's trainer behavior
 and the PPO timeout override still need an Isaac Sim training run.
+
+## Algorithm loading review
+
+`train.py` discovers algorithm modules by a top-level `train()` function and
+imports only the selected module. The package initializer no longer imports
+PPO and SAC eagerly; its export list now includes PPO2. This lets package
+discovery avoid loading the other training modules. The unused `skrl.config`
+import was also removed from SAC. The custom PPO2 and SAC update loops depend
+on skrl internals, so they remain unchanged until they can be checked against
+the version bundled with the training environment.
 
 ## Next review points
 
