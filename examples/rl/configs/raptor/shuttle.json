@@ -1,0 +1,244 @@
+{
+  "dynamics": {
+    "rotor_positions": [
+      [
+        0.248,
+        -0.248,
+        0.117624
+      ],
+      [
+        -0.248,
+        0.248,
+        0.117624
+      ],
+      [
+        0.248,
+        0.248,
+        0.117624
+      ],
+      [
+        -0.248,
+        -0.248,
+        0.117624
+      ]
+    ],
+    "rotor_thrust_directions": [
+      [
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        1
+      ]
+    ],
+    "rotor_torque_directions": [
+      [
+        0,
+        0,
+        -1
+      ],
+      [
+        0,
+        0,
+        -1
+      ],
+      [
+        0,
+        0,
+        1
+      ],
+      [
+        0,
+        0,
+        1
+      ]
+    ],
+    "rotor_thrust_coefficients": [
+      [
+        0,
+        0,
+        1.709716e-05
+      ],
+      [
+        0,
+        0,
+        1.709716e-05
+      ],
+      [
+        0,
+        0,
+        1.709716e-05
+      ],
+      [
+        0,
+        0,
+        1.709716e-05
+      ]
+    ],
+    "rotor_torque_constants": [
+      0.016,
+      0.016,
+      0.016,
+      0.016
+    ],
+    "rotor_time_constants_rising": [
+      0.008,
+      0.008,
+      0.008,
+      0.008
+    ],
+    "rotor_time_constants_falling": [
+      0.02,
+      0.02,
+      0.02,
+      0.02
+    ],
+    "mass": 3.500008,
+    "gravity": [
+      0,
+      0,
+      -9.81
+    ],
+    "J": [
+      [
+        0.02656365,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        0.02666658,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        0.04802635
+      ]
+    ],
+    "J_inv": [
+      [
+        37.64543,
+        0.0,
+        0.0
+      ],
+      [
+        0.0,
+        37.50013,
+        0.0
+      ],
+      [
+        0.0,
+        0.0,
+        20.8219
+      ]
+    ],
+    "hovering_throttle_relative": 0.506115,
+    "action_limit": {
+      "min": 0.0,
+      "max": 1400.0
+    }
+  },
+  "integration": {
+    "dt": 0.01
+  },
+  "mdp": {
+    "init": {
+      "guidance": 0.1,
+      "max_position": 0.5,
+      "max_angle": 1.570796,
+      "max_linear_velocity": 1.0,
+      "max_angular_velocity": 1.0,
+      "relative_rpm": true,
+      "min_rpm": -1.0,
+      "max_rpm": 0.0
+    },
+    "reward": {
+      "non_negative": false,
+      "scale": 1.0,
+      "constant": 1.5,
+      "termination_penalty": -100.0,
+      "position": 1.0,
+      "position_clip": 0.0,
+      "orientation": 0.1,
+      "linear_velocity": 0.0,
+      "angular_velocity": 0.0,
+      "linear_acceleration": 0.0,
+      "angular_acceleration": 0.0,
+      "action": 0.0,
+      "d_action": 1.0,
+      "position_error_integral": 0.0
+    },
+    "observation_noise": {
+      "position": 0.0,
+      "orientation": 0.0,
+      "linear_velocity": 0.0,
+      "angular_velocity": 0.0,
+      "imu_acceleration": 0.0
+    },
+    "action_noise": {
+      "normalized_rpm": 0.0
+    },
+    "termination": {
+      "enabled": true,
+      "position_threshold": 1.0,
+      "linear_velocity_threshold": 2.0,
+      "angular_velocity_threshold": 35.0,
+      "position_integral_threshold": 10000.0,
+      "orientation_integral_threshold": 50000.0
+    }
+  },
+  "disturbances": {
+    "random_force": {
+      "mean": 0.0,
+      "std": 0.0
+    },
+    "random_torque": {
+      "mean": 0.0,
+      "std": 0.0
+    }
+  },
+  "domain_randomization": {
+    "thrust_to_weight_min": 0.0,
+    "thrust_to_weight_max": 0.0,
+    "torque_to_inertia_min": 0.0,
+    "torque_to_inertia_max": 0.0,
+    "mass_min": 0.0,
+    "mass_max": 0.0,
+    "mass_size_deviation": 0.0,
+    "rotor_time_constant_rising_min": 0.0,
+    "rotor_time_constant_rising_max": 0.0,
+    "rotor_time_constant_falling_min": 0.0,
+    "rotor_time_constant_falling_max": 0.0,
+    "rotor_torque_constant_min": 0.0,
+    "rotor_torque_constant_max": 0.0,
+    "orientation_offset_angle_max": 0.0,
+    "disturbance_force_max": 0.0
+  },
+  "trajectory": {
+    "MIXTURE_N": 2,
+    "mixture": [
+      0.5,
+      0.5
+    ],
+    "langevin": {
+      "gamma": 1.0,
+      "omega": 2.0,
+      "sigma": 0.5,
+      "alpha": 0.01
+    }
+  }
+}

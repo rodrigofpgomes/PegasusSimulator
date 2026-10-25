@@ -1,0 +1,91 @@
+{
+ "description": "shuttle_glider/tracking, retained policy wls_ema_m02 (seed 3, agent_120000.pt) flown three times at once on the 12 m/s PX4 mission (hover at 10 m, climb to 20 m, 180 deg turn R 50 m, descent, deceleration 0.7 m/s^2, hover; 101 s): with the true state, with the PX4 EKF2 estimate and with the estimate and a GPS without random walk. Two PX4 SITL instances (vehicle_id 0 and 1) run in lockstep beside the true-state vehicle; the vehicles do not collide. 'color' tints each wing and its trail; 'label' names it in the video telemetry. Run from the repository root.",
+ "vehicle": "shuttle_glider2",
+ "vehicles": [
+  {
+   "name": "glider_true_state",
+   "type": "ppo2",
+   "task": "shuttle_glider/tracking",
+   "preset": "default",
+   "checkpoint": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/checkpoints/agent_120000.pt",
+   "run_metadata": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/run_metadata.json",
+   "color": "#ffffff",
+   "label": "True state",
+   "note": "policy observes the simulator state (reference run mission/mission_v12alt_s03)"
+  },
+  {
+   "name": "glider_px4",
+   "type": "ppo2",
+   "task": "shuttle_glider/tracking",
+   "preset": "default",
+   "checkpoint": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/checkpoints/agent_120000.pt",
+   "run_metadata": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/run_metadata.json",
+   "color": "#ff3b30",
+   "label": "PX4 EKF2",
+   "note": "policy observes the PX4 EKF2 estimate (configs/px4_shuttle_glider_estimator.json; reference run mission_px4)",
+   "px4": {
+    "mode": "estimator",
+    "px4_autolaunch": true,
+    "px4_vehicle_model": "none_shuttle_glider",
+    "num_rotors": 5,
+    "motor_order": [
+     0,
+     1,
+     2,
+     3,
+     4
+    ],
+    "airspeed": {},
+    "vehicle_id": 0,
+    "sensor_seed": 0,
+    "warmup_timeout_s": 60.0,
+    "warmup_stable_s": 2.0,
+    "log_sensors": false
+   }
+  },
+  {
+   "name": "glider_px4_gps_nodrift",
+   "type": "ppo2",
+   "task": "shuttle_glider/tracking",
+   "preset": "default",
+   "checkpoint": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/checkpoints/agent_120000.pt",
+   "run_metadata": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/run_metadata.json",
+   "color": "#ff40d0",
+   "label": "PX4 EKF2, GPS without random walk",
+   "note": "as glider_px4 with the GPS random walk removed (configs/px4_shuttle_glider_estimator_gps_nodrift.json; reference run mission_px4_gps_nodrift)",
+   "px4": {
+    "mode": "estimator",
+    "px4_autolaunch": true,
+    "px4_vehicle_model": "none_shuttle_glider",
+    "num_rotors": 5,
+    "motor_order": [
+     0,
+     1,
+     2,
+     3,
+     4
+    ],
+    "airspeed": {},
+    "vehicle_id": 1,
+    "sensor_seed": 0,
+    "warmup_timeout_s": 60.0,
+    "warmup_stable_s": 2.0,
+    "log_sensors": false,
+    "gps": {
+     "gps_xy_random_walk": 0.0,
+     "gps_z_random_walk": 0.0
+    }
+   }
+  }
+ ],
+ "flights": {
+  "video_mission_v12_px4": {
+   "note": "4K video (headless, 25 fps, ~25 min): LakeWorld, side camera on the right of the path (20 m, 4 m up, 32 mm, as the cover) framing the three vehicles, reference coloured by speed, 3 s trails; then compose the telemetry and encode with scripts/shuttle_glider/video/compose_mission_video.py RUN_DIR",
+   "play_multi": "$ISAACSIM_PYTHON examples/rl/play_multi.py --config examples/rl/scripts/shuttle_glider/manifests/tracking_wls_ema_m02_px4_video.json --environment extensions/pegasus.simulator/pegasus/simulator/assets/Worlds/LakeWorld/lake_world.usda --trajectory mission --traj_speed 12 --traj_radius 50 --traj_a_max 3 --mission_decel_amax 0.7 --traj_z 10 --spawn-altitude 10 --mission_climb 10 --mission_climb_rate 1.0 --episode_duration 101 --n_envs 1 --failure-distance 1000 --record --record_dir examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/video/mission_v12alt_3vehicles --follow-camera side --cam-side -20 --cam-side-up 4 --cam-focal 32 --cam-target all --cam-fit 0.6 --cam-shift 0.17 --trail 3 --line-width 4 --goal-marker-color '#1a1a1a' --headless --video-dir examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/video/mission_v12alt_3vehicles/frames"
+  },
+  "mission_v12_px4_3vehicles": {
+   "note": "same flight without video (check of the three runs against the reference runs)",
+   "play_multi": "$ISAACSIM_PYTHON examples/rl/play_multi.py --config examples/rl/scripts/shuttle_glider/manifests/tracking_wls_ema_m02_px4_video.json --trajectory mission --traj_speed 12 --traj_radius 50 --traj_a_max 3 --mission_decel_amax 0.7 --traj_z 10 --spawn-altitude 10 --mission_climb 10 --mission_climb_rate 1.0 --episode_duration 101 --n_envs 1 --failure-distance 1000 --record --record_dir examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/video/mission_v12alt_3vehicles_novideo --headless"
+  }
+ }
+}
