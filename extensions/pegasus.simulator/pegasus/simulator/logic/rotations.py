@@ -1,6 +1,7 @@
 """
 | File: rotations.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
 | Description: Implements utilitary rotations between ENU and NED inertial frame conventions and FLU and FRD body frame conventions.
 """

@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 """
 | File: nonlinear_controller_batch.py
+| Author: Marcelo Jacinto and Joao Pinto (marcelo.jacinto@tecnico.ulisboa.pt, joao.s.pinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
 | Description: This files serves as an example on how to use the control backends API to create a custom controller 
 for the vehicle from scratch and use it to perform a simulation, without using PX4 nor ROS. In this controller, we

@@ -1,6 +1,7 @@
 """
 | File: barometer.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
 | Description: Simulates a barometer. Based on the implementation provided in PX4 stil_gazebo (https://github.com/PX4/PX4-SITL_gazebo) by Elia Tarasov.
 | References: Both the original implementation provided in the gazebo based simulation and this one are based on the following article - 'A brief summary of atmospheric modeling', Cavcar, M., http://fisicaatmo.at.fcen.uba.ar/practicas/ISAweb.pdf
