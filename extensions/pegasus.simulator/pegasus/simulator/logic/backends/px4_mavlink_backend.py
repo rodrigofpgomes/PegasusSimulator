@@ -1,6 +1,7 @@
 """
 | File: px4_mavlink_backend.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | Description: File that implements the Mavlink Backend for communication/control with/of the vehicle simulation
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
 """
@@ -310,7 +311,7 @@ class PX4MavlinkBackend(Backend):
 
     def update_sensor(self, sensor_type: str, data):
         """Method that is used as callback for the vehicle for every iteration that a sensor produces new data. 
-        Only the IMU, GPS, Barometer and  Magnetometer sensor data are stored to be sent through mavlink. Every other 
+        Only the IMU, GPS, Barometer, Magnetometer and Airspeed sensor data are stored to be sent through mavlink. Every other 
         sensor data that gets passed to this function is discarded.
 
         Args:
@@ -326,6 +327,8 @@ class PX4MavlinkBackend(Backend):
             self.update_bar_data(data)
         elif sensor_type == "Magnetometer":
             self.update_mag_data(data)
+        elif sensor_type == "Airspeed":
+            self.update_airspeed_data(data)
         # If the data received is not from one of the above sensors, then this backend does
         # not support that sensor and it will just ignore it
         else:
@@ -364,13 +367,16 @@ class PX4MavlinkBackend(Backend):
         self._sensor_data.latitude_deg = int(data["latitude"] * 10000000)
         self._sensor_data.longitude_deg = int(data["longitude"] * 10000000)
         self._sensor_data.altitude = int(data["altitude"] * 1000)
-        self._sensor_data.eph = int(data["eph"])
-        self._sensor_data.epv = int(data["epv"])
+        # HIL_GPS eph/epv are position standard deviations in cm (PX4 reads eph * 1e-2 m),
+        # as gazebo_mavlink_interface sends them; the GPS sensor reports them in metres.
+        self._sensor_data.eph = int(round(float(data["eph"]) * 100))
+        self._sensor_data.epv = int(round(float(data["epv"]) * 100))
         self._sensor_data.velocity = int(data["speed"] * 100)
         self._sensor_data.velocity_north = int(data["velocity_north"] * 100)
         self._sensor_data.velocity_east = int(data["velocity_east"] * 100)
         self._sensor_data.velocity_down = int(data["velocity_down"] * 100)
-        self._sensor_data.cog = int(data["cog"] * 100)
+        # Course over ground [cdeg] in [0, 36000)
+        self._sensor_data.cog = int(round(float(data["cog"]) * 100)) % 36000
         self._sensor_data.satellites_visible = int(data["sattelites_visible"])
 
         # Signal that we have new GPS data
@@ -395,6 +401,19 @@ class PX4MavlinkBackend(Backend):
 
         # Signal that we have new Barometer data
         self._sensor_data.new_bar_data = True
+
+    def update_airspeed_data(self, data):
+        """Gets called by the 'update_sensor' method to update the current differential pressure data
+
+        Args:
+            data (dict): The data produced by an Airspeed sensor
+        """
+
+        # Differential pressure [hPa], as HIL_SENSOR expects
+        self._sensor_data.diff_pressure = float(data["diff_pressure"])
+
+        # Signal that we have new differential pressure data
+        self._sensor_data.new_press_data = True
 
     def update_mag_data(self, data):
         """Gets called by the 'update_sensor' method to update the current Vision data
@@ -437,14 +456,14 @@ class PX4MavlinkBackend(Backend):
             state (State): The current state of the vehicle.
         """
 
-        # Get the quaternion in the convention [x, y, z, w]
+        # Get the scalar-first quaternion [w, x, y, z]
         attitude = state.get_attitude_ned_frd()
 
-        # Rotate the quaternion to the mavlink standard
-        self._sensor_data.sim_attitude[0] = attitude[3]
-        self._sensor_data.sim_attitude[1] = attitude[0]
-        self._sensor_data.sim_attitude[2] = attitude[1]
-        self._sensor_data.sim_attitude[3] = attitude[2]
+        # State and MAVLink both use scalar-first quaternions
+        self._sensor_data.sim_attitude[0] = float(attitude[0])
+        self._sensor_data.sim_attitude[1] = float(attitude[1])
+        self._sensor_data.sim_attitude[2] = float(attitude[2])
+        self._sensor_data.sim_attitude[3] = float(attitude[3])
 
         # Get the angular velocity
         ang_vel = state.get_angular_velocity_frd()
@@ -714,7 +733,7 @@ class PX4MavlinkBackend(Backend):
                 self._sensor_data.abs_pressure,
                 self._sensor_data.diff_pressure,
                 self._sensor_data.pressure_alt,
-                self._sensor_data.altitude,
+                self._sensor_data.temperature,  # HIL_SENSOR field: temperature [degC] (was altitude)
                 fields_updated,
             )
         except:
