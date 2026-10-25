@@ -1,3 +1,89 @@
+# Pegasus Simulator RL
+
+Pegasus Simulator RL is a fork of the [Pegasus Simulator](https://github.com/PegasusSimulator/PegasusSimulator)
+(branch `dev_cuda`, Isaac Sim 5.1.0) that adds GPU-batched simulation and reinforcement learning (PPO and SAC) for
+multirotor and hybrid multirotor/fixed-wing vehicles. It includes the **Shuttle** quadrotor, the **EasyGlider**
+fixed-wing aircraft and the **Shuttle-Glider**, the hybrid vehicle obtained by rigidly attaching the EasyGlider below
+the Shuttle, with tasks that train policies at three levels of the control hierarchy of the Shuttle (thrust and
+moments, acceleration, rotor speeds) and a single policy that flies the Shuttle-Glider from hover to 14 m/s with its
+lift rotors, puller and control surfaces.
+
+![Shuttle-Glider flying over the Lake World](docs/_static/pegasus_rl_lake_world.jpg)
+
+This work was developed in the context of the MSc thesis *Reinforcement Learning Methods for Quadrotor and
+Hybrid-Vehicle Control* (Rodrigo Gomes, Instituto Superior Técnico, Universidade de Lisboa, 2026), within the CAPTURE
+project (ISR Lisbon, FCT, [doi:10.54499/PTDC/EEI-AUT/1732/2020](https://doi.org/10.54499/PTDC/EEI-AUT/1732/2020)) on
+shuttle drones that launch and capture fixed-wing aircraft. Everything needed to train and evaluate its policies and
+to regenerate its tables and figures is included; trained weights and raw logs are not.
+
+## What this fork adds to the Pegasus Simulator
+
+- **Batched simulation on the GPU**: vehicle, state, thruster, drag and sensor classes in PyTorch that simulate
+  thousands of vehicles through a single PhysX view (`extensions/pegasus.simulator/pegasus/simulator/logic/*_batch*`).
+- **Reinforcement learning layer** (`logic/rl`): an RL backend with three action modes (body forces and moments,
+  collective thrust and moments, rotor speeds) plus control surfaces, a common environment with correct handling of
+  terminations and time-limit truncations, PPO, PPO2 (RSL-RL style) and SAC on top of skrl.
+- **Vehicle models**: the Shuttle quadrotor with first-order motor dynamics, the EasyGlider with an AVL-based
+  aerodynamic model with control surfaces and a puller propeller, and the Shuttle-Glider assembly; binary USD assets
+  and a Lake World environment.
+- **PX4 state estimation**: a backend that replaces the true state given to a trained policy by the EKF2 estimate of
+  PX4 SITL running in lockstep with simulated IMU, GPS, barometer, magnetometer and airspeed sensors, with airframes
+  for the Shuttle and the Shuttle-Glider.
+- **Tasks, scripts and results**: the RL tasks (`examples/rl/tasks`), the training and evaluation scripts
+  (`examples/rl/scripts`) and the scripts that export the tables and draw the figures (`results/`).
+- Fixes to the original backends and sensors (quaternion convention, GPS and barometer noise, sensor timing); see the
+  `fix:` commits of the history.
+
+## Quick start
+
+Install Isaac Sim 5.1.0 and this extension as in the
+[Pegasus documentation](https://pegasussimulator.github.io/PegasusSimulator/source/setup/installation.html), then add
+the RL libraries to the Isaac Sim Python and train and evaluate a task:
+
+```bash
+~/isaacsim_5.1.0/python.sh -m pip install skrl==1.4.3 rsl-rl-lib==5.0.1
+~/isaacsim_5.1.0/python.sh examples/rl/train.py --task shuttle/direct_rotor/baseline/raptor_tracking --algo ppo2 \
+    --preset tanh --headless
+~/isaacsim_5.1.0/python.sh examples/rl/play.py --task shuttle/direct_rotor/baseline/raptor_tracking --algo ppo2 \
+    --preset tanh --checkpoint <run>/checkpoints/<agent>.pt --n_envs 16
+```
+
+**To reproduce all the results, follow [REPRODUCE.md](REPRODUCE.md).**
+
+## Repository layout
+
+| Path | Content |
+| --- | --- |
+| `extensions/pegasus.simulator` | the Pegasus extension, with the batched classes, RL layer, vehicle models, assets and PX4 backends |
+| `examples/classic` | the original Pegasus examples, and batched versions of the Python control examples |
+| `examples/rl/train.py`, `play.py`, `play_multi.py` | training, evaluation on the task episodes, and evaluation of several controllers on references, missions and lemniscates (with optional PX4 estimation and video) |
+| `examples/rl/tasks` | the RL tasks ([tasks/README.md](examples/rl/tasks/README.md)) |
+| `examples/rl/scripts` | training and evaluation scripts of each experiment |
+| `examples/rl/configs`, `examples/rl/px4_vehicles` | PX4 and RAPTOR configurations, PX4 airframes |
+| `examples/rl/diagnostics` | trim of the Shuttle-Glider and of the EasyGlider |
+| `results/` | export of the evaluation logs to tables (`export_results.py`) and figures (`plot_results`) |
+| `tests/review` | offline tests (`python -m pytest tests/review`, no Isaac Sim needed) |
+
+## Citation and credits
+
+If you use this work, please cite the thesis and the Pegasus Simulator (citation below). The thrust-and-moment task
+is adapted from the quadcopter task of [Isaac Lab](https://github.com/isaac-sim/IsaacLab) (BSD-3-Clause), and the
+rotor-level task and Langevin references from the RAPTOR pre-training of
+[rl-tools](https://github.com/rl-tools/raptor) (MIT). The EasyGlider aerodynamic derivatives are adapted from the AVL
+model of Cavalheiro and Guerreiro, *Fixed-wing UAV simulation in PX4 and Gazebo: an AVL-based approach* (YEF-ECE 2025).
+
+```bibtex
+@mastersthesis{gomes2026rl,
+  author = {Rodrigo Gomes},
+  title  = {Reinforcement Learning Methods for Quadrotor and Hybrid-Vehicle Control},
+  school = {Instituto Superior T{\'e}cnico, Universidade de Lisboa},
+  year   = {2026}
+}
+```
+
+This fork keeps the BSD 3-Clause license of the Pegasus Simulator ([LICENSE](LICENSE)).
+---
+
 # Pegasus Simulator
 
 ![IsaacSim 5.1.0](https://img.shields.io/badge/IsaacSim-5.1.0-brightgreen.svg)
