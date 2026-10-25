@@ -146,7 +146,7 @@ class GPS(Sensor):
         )
 
         # Add noise to the velocity expressed in the world frame
-        velocity: torch.Tensor = state.linear_velocity  # + self._noise_gps_vel
+        velocity: torch.Tensor = state.linear_velocity + self._noise_gps_vel
 
         # Compute the xy speed
         speed: torch.Tensor = torch.linalg.norm(velocity[:2])
@@ -159,8 +159,6 @@ class GPS(Sensor):
 
         if (cog < 0.0).item():
             cog = cog + 360.0
-
-        cog = cog * 100
 
         # Add the values to the dictionary and return it
         self._state = {
@@ -176,7 +174,7 @@ class GPS(Sensor):
             "fix_type": self._fix_type,
             "eph": self._eph,
             "epv": self._epv,
-            "cog": torch.tensor(0.0, dtype=torch.float32, device=self.device),  # cog,
+            "cog": cog,  # [deg], from the reported velocity
             "sattelites_visible": self._sattelites_visible,
             "latitude_gt": latitude_gt,
             "longitude_gt": longitude_gt,

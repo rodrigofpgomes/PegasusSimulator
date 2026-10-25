@@ -134,7 +134,7 @@ class IMU(Sensor):
         """
 
         # Gyroscopic terms
-        tau_g: torch.Tensor = self._accelerometer_bias_correlation_time # _gyroscope_bias_correlation_time ??
+        tau_g: torch.Tensor = self._gyroscope_bias_correlation_time
 
         # Discrete-time standard deviation equivalent to an "integrating" sampler with integration time dt
         sigma_g_d: torch.Tensor = 1 / torch.sqrt(dt) * self._gyroscope_noise_density
@@ -181,7 +181,7 @@ class IMU(Sensor):
             self._accelerometer_bias[i] = phi_a_d * self._accelerometer_bias[i] + sigma_b_a_d * torch.randn((), device=self.device)
             linear_acceleration[i] = (
                 linear_acceleration[i] + sigma_a_d * torch.randn((), device=self.device)
-            ) #+ self._accelerometer_bias[i]
+            ) + self._accelerometer_bias[i]
 
         # TODO - Add small "noisy" to the attitude
 

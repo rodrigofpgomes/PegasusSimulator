@@ -98,7 +98,12 @@ class Sensor:
             self._total_time += dt
 
             # If it is time to update the sensor data, then just call the update function of the sensor
-            if self._total_time >= self._update_period or self._first_update:
+            # Float32 accumulation can place ten 0.01 s steps just below a
+            # 0.1 s period and otherwise delay a 10 Hz sensor to 0.11 s.
+            period_reached = self._total_time >= self._update_period or torch.isclose(
+                self._total_time, self._update_period, rtol=1e-6, atol=0.0
+            )
+            if period_reached or self._first_update:
 
                 # Result of the update function for the sensor
                 result = fnc(self, state, self._total_time)

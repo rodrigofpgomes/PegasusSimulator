@@ -157,7 +157,7 @@ class Barometer(Sensor):
         # Apply noise and drift
         abs_pressure_noise: torch.Tensor = y1  # 1 Pa RMS noise
         self._baro_drift_pa = self._baro_drift_pa + (self._baro_drift_pa_per_sec * dt)  # Update the drift
-        absolute_pressure_noisy: torch.Tensor = absolute_pressure + abs_pressure_noise + self._baro_drift_pa_per_sec
+        absolute_pressure_noisy: torch.Tensor = absolute_pressure + abs_pressure_noise + self._baro_drift_pa  # accumulated drift, as gazebo_barometer_plugin
 
         # Convert to hPa (Note: 1 hPa = 100 Pa)
         absolute_pressure_noisy_hpa: torch.Tensor = absolute_pressure_noisy * 0.01
