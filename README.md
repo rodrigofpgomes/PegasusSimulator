@@ -64,6 +64,14 @@ the RL libraries to the Isaac Sim Python and train and evaluate a task:
 | `results/` | export of the evaluation logs to tables (`export_results.py`) and figures (`plot_results`) |
 | `tests/review` | offline tests (`python -m pytest tests/review`, no Isaac Sim needed) |
 
+## Credits
+
+This fork is built on the [Pegasus Simulator](https://github.com/PegasusSimulator/PegasusSimulator) (see its citation
+below). The thrust-and-moment task is adapted from the quadcopter task of [Isaac Lab](https://github.com/isaac-sim/IsaacLab)
+(BSD-3-Clause), and the rotor-level task and Langevin references from the RAPTOR pre-training of
+[rl-tools](https://github.com/rl-tools/raptor) (MIT). The EasyGlider aerodynamic derivatives are adapted from the AVL
+model of Cavalheiro and Guerreiro, *Fixed-wing UAV simulation in PX4 and Gazebo: an AVL-based approach* (YEF-ECE 2025).
+
 ## License
 
 This fork keeps the BSD 3-Clause license of the Pegasus Simulator ([LICENSE](LICENSE)).
