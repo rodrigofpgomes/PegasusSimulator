@@ -1,0 +1,205 @@
+"""
+| File: base_env.py
+| Author: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
+| License: BSD-3-Clause. Copyright (c) 2026, Rodrigo Gomes. All rights reserved.
+| Description: Base class for all RL environments in Pegasus.
+"""
+
+from __future__ import annotations
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+
+import gymnasium as gym
+import numpy as np
+import torch
+
+__all__ = ["PegasusEnv", "PegasusEnvCfg"]
+
+
+@dataclass
+class PegasusEnvCfg:
+    """Base configuration for Pegasus Environments."""
+    observation_space: int = 0
+    action_space: int = 0
+    state_space: int = 0
+    episode_length_s: float = 10.0
+    decimation: int = 2
+    sim_dt: float = 0.01
+    action_mode: str = "direct_force"  # "direct_force", "rotor_velocity" or "rotor_velocity_direct"
+    observation_source: str = "ground_truth"
+    vehicle: str = "Iris"              # key into pegasus.simulator.params.ROBOTS
+
+
+class PegasusEnv(ABC):
+    """Base interface for batched Pegasus tasks consumed by the skrl wrapper."""
+
+    def __init__(self, cfg: PegasusEnvCfg, backend, reset_manager):
+        """Builds the vectorized environment from its config, backend and reset manager.
+
+        Derives episode bookkeeping (``max_episode_length``, ``step_dt``) and exposes the
+        Gymnasium ``policy`` (and optional ``critic``) observation/action spaces.
+        """
+        if cfg.observation_source != "ground_truth":
+            raise NotImplementedError("Sensor/estimator observations require a dedicated adapter and a new policy contract")
+        if cfg.sim_dt <= 0 or cfg.decimation < 1 or cfg.episode_length_s < cfg.sim_dt * cfg.decimation:
+            raise ValueError("Invalid simulation/control timestep or episode duration")
+        self.cfg = cfg
+        self.backend = backend
+        self.reset_manager = reset_manager
+
+        self.num_envs = backend.n_vehicles
+        # One control step contains the configured number of physics steps
+        self.max_episode_length = int(cfg.episode_length_s / (cfg.sim_dt * cfg.decimation))
+        self.step_dt = cfg.sim_dt * cfg.decimation
+
+        self.extras: dict = {}
+        self._reset_callbacks: list = []
+        self._render_enabled = False
+
+        # Allocated in setup() once simulation is active
+        self.episode_length_buf = None
+        self.reset_terminated = None
+        self.reset_time_outs = None
+
+        # The wrapper reads the policy and optional critic spaces separately
+        self.observation_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(cfg.observation_space,), dtype=np.float32)
+        self.state_space = gym.spaces.Box(low=-np.inf, high=np.inf, shape=(cfg.state_space,), dtype=np.float32) if cfg.state_space > 0 else None
+        self.action_space = gym.spaces.Box(low=-1.0, high=1.0, shape=(cfg.action_space,), dtype=np.float32)
+
+
+    def setup(self):
+        """Initializes device buffers after timeline starts."""
+        self.episode_length_buf = torch.zeros(self.num_envs, dtype=torch.long, device=self.device)
+        self.reset_terminated = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+        self.reset_time_outs = torch.zeros(self.num_envs, dtype=torch.bool, device=self.device)
+
+    @property
+    def device(self) -> str:
+        """Torch device of the underlying backend (e.g. ``"cuda"``)."""
+        return self.backend.device
+
+    @property
+    def parts_per_vehicle(self) -> int:
+        """Number of rigid-body parts that make up each vehicle."""
+        return self.backend.parts_per_vehicle
+
+    @property
+    def unwrapped(self):
+        """Returns the base environment (no wrappers applied here)."""
+        return self
+
+
+    # =============================================================================
+    # Public API
+    # =============================================================================
+
+    def step(self, actions: torch.Tensor):
+        """Apply one action for ``decimation`` physics steps, then finish the transition.
+
+        Rewards and termination use the post-physics state. Completed rows keep
+        their terminal observation before the task resets those vehicles.
+        Rendering is controlled independently by ``_render_enabled``.
+        """
+        self.extras = {}
+        self._pre_physics_step(actions)
+
+        # Physics sub-stepping
+        for _ in range(self.cfg.decimation):
+            self._apply_action()
+            self._world_step()
+
+        self.episode_length_buf += 1
+
+        reward = self._get_rewards()
+        terminated, truncated = self._get_dones()
+
+        self.reset_terminated = terminated
+        self.reset_time_outs = truncated
+        self.extras["time_outs"] = truncated.view(self.num_envs, 1)
+
+        # Keep the physical terminal observation before the task teleports any
+        # completed vehicle. The wrapper uses it for learning after autoreset.
+        done = terminated | truncated
+        reset_ids = done.nonzero(as_tuple=False).squeeze(-1)
+        if reset_ids.numel() > 0:
+            self.extras["final_observation"] = self._get_observations()["policy"].clone()
+            self.extras["final_observation_mask"] = done
+            self._reset_idx(reset_ids)
+
+        # The returned observation belongs to the next episode for reset rows
+        obs = self._get_observations()
+        return obs, reward, terminated, truncated, dict(self.extras)
+
+    def reset(self):
+        """Resets all environments and retrieves initial observations."""
+        self.extras = {}
+        ids = torch.arange(self.num_envs, device=self.device)
+        self._reset_idx(ids)
+        return self._get_observations(), dict(self.extras)
+
+    def render(self):
+        """Draw the current state without another physics step."""
+        self._world.render()
+
+    def register_reset_callback(self, fn):
+        """Registers a callback ``fn(env_ids)`` invoked whenever environments are reset."""
+        self._reset_callbacks.append(fn)
+
+
+    # =============================================================================
+    # Internal Methods
+    # =============================================================================
+
+    def _world_step(self):
+        """Advances the physics simulation by one step (with or without rendering)."""
+        self._world.step(render=self._render_enabled)
+
+    def _call_reset_callbacks(self, env_ids: torch.Tensor):
+        """Executes the registered callback functions for the reset environments."""
+        for fn in self._reset_callbacks:
+            fn(env_ids)
+
+    def _normalized_rotor_velocities(self, env_ids: torch.Tensor) -> torch.Tensor:
+        """Return the selected vehicles' actual rotor speeds in [-1, 1]."""
+        thrusters = self.backend._vehicle._thrusters
+        minimum = thrusters.min_rotor_velocity.reshape(-1)
+        maximum = thrusters.max_rotor_velocity.reshape(-1)
+        omega = thrusters.velocity[env_ids]
+
+        # Use the limits of this vehicle, including a separate limit for each rotor
+        return 2.0 * (omega - minimum) / (maximum - minimum) - 1.0
+
+
+    # =============================================================================
+    # Mandatory Task Interface
+    # =============================================================================
+
+    @abstractmethod
+    def _pre_physics_step(self, actions: torch.Tensor):
+        """Processes the actions (e.g., clamping) before applying them to the physics engine."""
+        pass    
+
+    @abstractmethod
+    def _apply_action(self):
+        """Sets the processed actions as forces and torques applied to the simulator."""
+        pass
+
+    @abstractmethod
+    def _get_observations(self) -> dict:
+        """Collects and returns the current observations (state) of the environment."""
+        pass
+
+    @abstractmethod
+    def _get_rewards(self) -> torch.Tensor:
+        """Calculates and returns the reward for the current step."""
+        pass
+
+    @abstractmethod
+    def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
+        """Returns the episode termination flags: (terminated, truncated)."""
+        pass
+
+    @abstractmethod
+    def _reset_idx(self, env_ids: torch.Tensor):
+        """Resets the physical state and metrics for the specified environments."""
+        pass
