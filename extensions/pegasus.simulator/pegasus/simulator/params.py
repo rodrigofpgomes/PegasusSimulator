@@ -31,7 +31,6 @@ ROBOTS_ASSETS = ASSET_PATH + "/Robots"
 # Define the built in robots of the extension
 ROBOTS = {
     "Iris": ROBOTS_ASSETS + "/Iris/iris.usd",
-    "Iris_White": ROBOTS_ASSETS + "/Iris/iris_white.usd",
     "Crazyflie": ROBOTS_ASSETS + "/Crazyflie/cf2x.usd",
     "Shuttle": ROBOTS_ASSETS + "/Shuttle/shuttle.usd",
     "Easyglider": ROBOTS_ASSETS + "/Easyglider/easyglider.usd",

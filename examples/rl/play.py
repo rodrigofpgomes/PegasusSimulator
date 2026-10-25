@@ -678,7 +678,7 @@ def main():
 
         lqr_vehicle = MultirotorBatch(
             stage_prefix="/World/lqr_quadrotor",
-            usd_file=ROBOTS["Iris_White"],
+            usd_file=ROBOTS["Iris"],
             init_pos=rl_vehicle._init_pos,
             init_orientation=rl_vehicle._init_orientation,
             vehicle_batch_id=2,
