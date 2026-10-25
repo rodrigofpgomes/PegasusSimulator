@@ -1,6 +1,7 @@
 """
 | File: ros2_backend.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | Description: File that implements the ROS2 Backend for communication/control with/of the vehicle simulation through ROS2 topics
 | License: BSD-3-Clause. Copyright (c) 2024, Marcelo Jacinto. All rights reserved.
 """
@@ -230,33 +231,33 @@ class ROS2Backend(Backend):
         accel.header.frame_id = "map"
 
         # Fill the position and attitude of the vehicle in ENU
-        pose.pose.position.x = state.position[0]
-        pose.pose.position.y = state.position[1]
-        pose.pose.position.z = state.position[2]
+        pose.pose.position.x = float(state.position[0])
+        pose.pose.position.y = float(state.position[1])
+        pose.pose.position.z = float(state.position[2])
 
-        pose.pose.orientation.x = state.attitude[0]
-        pose.pose.orientation.y = state.attitude[1]
-        pose.pose.orientation.z = state.attitude[2]
-        pose.pose.orientation.w = state.attitude[3]
+        pose.pose.orientation.x = float(state.attitude[1])
+        pose.pose.orientation.y = float(state.attitude[2])
+        pose.pose.orientation.z = float(state.attitude[3])
+        pose.pose.orientation.w = float(state.attitude[0])
 
         # Fill the linear and angular velocities in the body frame of the vehicle
         twist.twist.linear.x = state.linear_body_velocity[0]
         twist.twist.linear.y = state.linear_body_velocity[1]
         twist.twist.linear.z = state.linear_body_velocity[2]
 
-        twist.twist.angular.x = state.angular_velocity[0]
-        twist.twist.angular.y = state.angular_velocity[1]
-        twist.twist.angular.z = state.angular_velocity[2]
+        twist.twist.angular.x = float(state.angular_velocity[0])
+        twist.twist.angular.y = float(state.angular_velocity[1])
+        twist.twist.angular.z = float(state.angular_velocity[2])
 
         # Fill the linear velocity of the vehicle in the inertial frame
-        twist_inertial.twist.linear.x = state.linear_velocity[0]
-        twist_inertial.twist.linear.y = state.linear_velocity[1]
-        twist_inertial.twist.linear.z = state.linear_velocity[2]
+        twist_inertial.twist.linear.x = float(state.linear_velocity[0])
+        twist_inertial.twist.linear.y = float(state.linear_velocity[1])
+        twist_inertial.twist.linear.z = float(state.linear_velocity[2])
 
         # Fill the linear acceleration in the inertial frame
-        accel.accel.linear.x = state.linear_acceleration[0]
-        accel.accel.linear.y = state.linear_acceleration[1]
-        accel.accel.linear.z = state.linear_acceleration[2]
+        accel.accel.linear.x = float(state.linear_acceleration[0])
+        accel.accel.linear.y = float(state.linear_acceleration[1])
+        accel.accel.linear.z = float(state.linear_acceleration[2])
 
         # Publish the messages containing the state of the vehicle
         self.pose_pub.publish(pose)
@@ -270,13 +271,13 @@ class ROS2Backend(Backend):
             t.header.stamp = pose.header.stamp
             t.header.frame_id = "map"
             t.child_frame_id = self._namespace + '_' + 'base_link'
-            t.transform.translation.x = state.position[0]
-            t.transform.translation.y = state.position[1]
-            t.transform.translation.z = state.position[2]
-            t.transform.rotation.x = state.attitude[0]
-            t.transform.rotation.y = state.attitude[1]
-            t.transform.rotation.z = state.attitude[2]
-            t.transform.rotation.w = state.attitude[3]
+            t.transform.translation.x = float(state.position[0])
+            t.transform.translation.y = float(state.position[1])
+            t.transform.translation.z = float(state.position[2])
+            t.transform.rotation.x = float(state.attitude[1])
+            t.transform.rotation.y = float(state.attitude[2])
+            t.transform.rotation.z = float(state.attitude[3])
+            t.transform.rotation.w = float(state.attitude[0])
             self.tf_broadcaster.sendTransform(t)
         
 
