@@ -1,6 +1,7 @@
 """
 | File: state.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
 | Description: Describes the state of a vehicle (or rigidbody).
 """
@@ -86,11 +87,11 @@ class State:
             np.ndarray: A torch tensor with [u,v,w] that defines the velocity of the vehicle expressed in the FRD body frame.
         """
 
-        # Get the linear acceleration in FLU convention
-        linear_acc_body_flu = quaternion_to_matrix(self.attitude).T @ self.linear_acceleration
+        # Get the linear velocity in FLU convention
+        linear_vel_body_flu = quaternion_to_matrix(self.attitude).T @ self.linear_velocity
 
-        # Convert the linear acceleration in the body frame expressed in FLU convention to the FRD convention
-        return rot_FLU_to_FRD(device=self.device, dtype=torch.float32) @ linear_acc_body_flu
+        # Convert the linear velocity in the body frame expressed in FLU convention to the FRD convention
+        return rot_FLU_to_FRD(device=self.device, dtype=torch.float32) @ linear_vel_body_flu
 
 
     def get_linear_velocity_ned(self):
