@@ -1,0 +1,32 @@
+{
+  "vehicle": "shuttle_glider2",
+  "vehicles": [
+    {
+      "name": "glider_px4_estimate",
+      "type": "ppo2",
+      "task": "shuttle_glider/tracking",
+      "preset": "default",
+      "checkpoint": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/checkpoints/agent_120000.pt",
+      "run_metadata": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/run_metadata.json",
+      "px4": {
+        "mode": "estimator",
+        "px4_autolaunch": true,
+        "px4_vehicle_model": "none_shuttle_glider",
+        "num_rotors": 5,
+        "motor_order": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "airspeed": {},
+        "vehicle_id": 0,
+        "sensor_seed": 0,
+        "warmup_timeout_s": 60.0,
+        "warmup_stable_s": 2.0,
+        "log_sensors": false
+      }
+    }
+  ]
+}
