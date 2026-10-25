@@ -28,7 +28,16 @@ ASSET_PATH = ROOT + "/pegasus.simulator/pegasus/simulator/assets"
 ROBOTS_ASSETS = ASSET_PATH + "/Robots"
 
 # Define the built in robots of the extension
-ROBOTS = {"Iris": ROBOTS_ASSETS + "/Iris/iris.usd"} #, "Flying Cube": ROBOTS_ASSETS + "/iris_cube.usda"}
+ROBOTS = {
+    "Iris": ROBOTS_ASSETS + "/Iris/iris.usd",
+    "Iris_White": ROBOTS_ASSETS + "/Iris/iris_white.usd",
+    "Crazyflie": ROBOTS_ASSETS + "/Crazyflie/cf2x.usd",
+    "Shuttle": ROBOTS_ASSETS + "/Shuttle/shuttle.usd",
+    "Easyglider": ROBOTS_ASSETS + "/Easyglider/easyglider.usd",
+    "Shuttle_glider2": ROBOTS_ASSETS + "/Shuttle/shuttle_glider2.usd",
+}
+
+#, "Flying Cube": ROBOTS_ASSETS + "/iris_cube.usda"}
 
 # Setup the default simulation environments path
 NVIDIA_ASSETS_PATH = str(nucleus.get_assets_root_path())
@@ -66,6 +75,9 @@ for asset in NVIDIA_SIMULATION_ENVIRONMENTS:
 # Add the omniverse assets to the list
 for asset in OMNIVERSE_ENVIRONMENTS:
     SIMULATION_ENVIRONMENTS[asset] = OMNIVERSE_ENVIRONMENTS[asset]
+
+# Add the worlds shipped with the extension
+SIMULATION_ENVIRONMENTS["Lake World"] = ASSET_PATH + "/Worlds/LakeWorld/lake_world.usd"
 
 BACKENDS = {
     "px4": "px4",
