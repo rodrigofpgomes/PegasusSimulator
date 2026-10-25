@@ -1,6 +1,7 @@
 """
 | File: quadratic_thrust_curve.py
 | Author: Marcelo Jacinto (marcelo.jacinto@tecnico.ulisboa.pt)
+| Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | Descriptio: File that implements a quadratic thrust curve for rotors
 | License: BSD-3-Clause. Copyright (c) 2023, Marcelo Jacinto. All rights reserved.
 """
@@ -20,7 +21,7 @@ class QuadraticThrustCurve(ThrustCurve):
             The dictionary default parameters are
 
             >>> {"num_rotors": 4,
-            >>>  "rotor_constant": [5.84e-6, 5.84e-6, 5.84e-6, 5.84e-6],
+            >>>  "rotor_constant": [8.54858e-6, 8.54858e-6, 8.54858e-6, 8.54858e-6],
             >>>  "rolling_moment_coefficient": [1e-6, 1e-6, 1e-6, 1e-6],
             >>>  "rot_dir": [-1, -1, 1, 1],
             >>>  "min_rotor_velocity": [0, 0, 0, 0],                      # rad/s
