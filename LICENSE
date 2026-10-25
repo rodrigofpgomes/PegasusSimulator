@@ -1,6 +1,8 @@
 BSD 3-Clause License
 
 Copyright (c) 2023, Marcelo Fialho Jacinto
+Copyright (c) 2026, Rodrigo Gomes (batched simulation, reinforcement learning layer, Shuttle and
+Shuttle-Glider models and tools added in this fork)
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
