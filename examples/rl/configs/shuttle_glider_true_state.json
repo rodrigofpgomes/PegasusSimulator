@@ -1,0 +1,13 @@
+{
+  "vehicle": "shuttle_glider2",
+  "vehicles": [
+    {
+      "name": "wls_ema_m02_s03",
+      "type": "ppo2",
+      "task": "shuttle_glider/tracking",
+      "preset": "default",
+      "checkpoint": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/checkpoints/agent_120000.pt",
+      "run_metadata": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/run_metadata.json"
+    }
+  ]
+}

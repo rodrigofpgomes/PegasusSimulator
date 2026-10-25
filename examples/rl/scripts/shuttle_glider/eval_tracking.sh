@@ -13,7 +13,8 @@
 # Usage (from the repository root): examples/rl/scripts/shuttle_glider/eval_tracking.sh [--dry-run]
 # Environment: VARIANTS (base), SEEDS (3), ITERATIONS (5000), REGIMES, N_EVAL_ENVS (200), DURATION (12),
 #              EVAL_SEED (1000), T_SKIP (3), ROOT, EXTRA_ENV_CFG (space-separated KEY=VALUE added to every regime,
-#              e.g. surface_override=trim for the surface ablation).
+#              e.g. surface_override=trim for the surface ablation), OUT_ROOT (if set, results go to
+#              $OUT_ROOT/<variant>/all/<regime>, the layout read by results/shuttle_glider/tracking_regimes).
 set -u
 
 REPO="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"
@@ -61,6 +62,7 @@ for entry in $VARIANTS; do
     for regime in $REGIMES; do
       if ! regime_args "$regime"; then echo "[FAIL] unknown regime $regime"; failed=$((failed+1)); continue; fi
       out="$ROOT/$variant/eval/$name/$regime"
+      [ -n "${OUT_ROOT:-}" ] && out="$OUT_ROOT/$variant/all/$regime"
       [ -f "$out/.done" ] && { echo "[skip ] $variant/$name $regime"; continue; }
       echo "[eval ] $variant/$name $regime"; [ "$DRY" = 1 ] && continue
       rm -rf "$out"; mkdir -p "$out"
@@ -71,5 +73,5 @@ for entry in $VARIANTS; do
     done
   done
 done
-[ "$DRY" = 0 ] && python3 "$REPO/examples/rl/scripts/shuttle_glider/summarize_tracking_eval.py" "$ROOT" --t-skip "$T_SKIP" --csv "$ROOT/regimes_summary.csv"
+[ "$DRY" = 0 ] && [ -z "${OUT_ROOT:-}" ] && python3 "$REPO/examples/rl/scripts/shuttle_glider/summarize_tracking_eval.py" "$ROOT" --t-skip "$T_SKIP" --csv "$ROOT/regimes_summary.csv"
 echo "finished; failed: $failed (results: $ROOT)"; [ $failed -eq 0 ]
