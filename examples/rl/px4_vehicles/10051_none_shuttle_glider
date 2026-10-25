@@ -1,0 +1,44 @@
+#!/bin/sh
+#
+# @name Pegasus Shuttle-Glider SITL (estimator only)
+# @type Plane
+#
+# PX4 only estimates the state of the Shuttle-Glider (EKF2 with IMU, GPS, baro, mag and pitot); the
+# policy keeps the actuation, so the allocation below is only a placeholder with the real geometry.
+# It is a fixed-wing airframe on purpose: rc.fw_defaults/rc.fw_apps start airspeed_selector and the
+# fixed-wing land detector, and EKF2 fuses airspeed and sideslip and estimates the wind only for a
+# fixed-wing vehicle that is in the air. The four lift rotors have no place in a fixed-wing allocation.
+#
+# Geometry follows the Pegasus shuttle_glider2 USDA, relative to the merged-body CoM and in FRD.
+#
+
+. ${R}etc/init.d/rc.fw_defaults
+
+param set-default CA_AIRFRAME 1
+param set-default CA_ROTOR_COUNT 1
+
+# EasyGlider propeller (rotor_puller): 0.3427 m forward and 0.2976 m below the CoM, pulling along +x.
+param set-default CA_ROTOR0_PX 0.343
+param set-default CA_ROTOR0_PZ 0.298
+param set-default CA_ROTOR0_AX 1.0
+param set-default CA_ROTOR0_AZ 0.0
+
+# Aileron pair, elevator and rudder, as in the gazebo-classic glider airframe.
+param set-default CA_SV_CS_COUNT 4
+param set-default CA_SV_CS0_TYPE 1
+param set-default CA_SV_CS0_TRQ_R -0.5
+param set-default CA_SV_CS1_TYPE 2
+param set-default CA_SV_CS1_TRQ_R 0.5
+param set-default CA_SV_CS2_TYPE 3
+param set-default CA_SV_CS2_TRQ_P 1.0
+param set-default CA_SV_CS3_TYPE 4
+param set-default CA_SV_CS3_TRQ_Y 1.0
+
+param set-default PWM_MAIN_FUNC1 101
+param set-default PWM_MAIN_FUNC2 201
+param set-default PWM_MAIN_FUNC3 202
+param set-default PWM_MAIN_FUNC4 203
+param set-default PWM_MAIN_FUNC5 204
+
+# Airspeed is fused above EKF2_ARSP_THR m/s (rc.fw_defaults: 8) together with sideslip (EKF2_FUSE_BETA 1).
+# The pitot arrives as HIL_SENSOR diff_pressure, so the gz-only SENS_EN_ARSPDSIM stays 0.
