@@ -2,6 +2,8 @@
 | File: quadcopter_env.py
 | Description: Quadcopter hover task (adapted from Isaac Lab).
 | License: BSD-3-Clause.
+| Adapted from isaaclab_tasks/direct/quadcopter/quadcopter_env.py of Isaac Lab (https://github.com/isaac-sim/IsaacLab),
+| Copyright (c) 2022-2025, The Isaac Lab Project Developers, BSD-3-Clause.
 
 Observation space (12):
     lin_vel_err_b       (3) - linear velocity minus the velocity reference (zero in this task), in the body frame

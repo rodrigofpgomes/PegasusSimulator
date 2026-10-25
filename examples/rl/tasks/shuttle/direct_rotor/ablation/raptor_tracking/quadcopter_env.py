@@ -2,6 +2,8 @@
 | File: quadcopter_env.py
 | Adapted by: Rodrigo Gomes (rodrigofpgomes@tecnico.ulisboa.pt)
 | License: BSD-3-Clause.
+| Task definition (observation, reward, termination, initial states) adapted from the RAPTOR pre-training of
+| rl-tools (https://github.com/rl-tools/raptor), Copyright (c) 2023-2025 Jonas Eschmann, MIT License.
 | Description: Ablation of the RAPTOR-style tracking baseline (shuttle/direct_rotor/baseline/raptor_tracking):
 |              selectable orientation cost, optional velocity cost and optional reference feedforward in the
 |              observation. The defaults reproduce the baseline.

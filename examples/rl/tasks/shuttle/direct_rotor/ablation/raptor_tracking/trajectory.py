@@ -1,3 +1,5 @@
+# Langevin reference adapted from rl-tools l2f (https://github.com/rl-tools/rl-tools), Copyright (c) 2023 Jonas
+# Eschmann, MIT License.
 import torch
 
 class RaptorLikeTrajectory:
