@@ -11,10 +11,10 @@ lift rotors, puller and control surfaces.
 ![Shuttle-Glider flying over the Lake World](docs/_static/pegasus_rl_lake_world.jpg)
 
 This work was developed in the context of the MSc thesis *Reinforcement Learning Methods for Quadrotor and
-Hybrid-Vehicle Control* (Rodrigo Gomes, Instituto Superior Técnico, Universidade de Lisboa, 2026), within the CAPTURE
-project (ISR Lisbon, FCT, [doi:10.54499/PTDC/EEI-AUT/1732/2020](https://doi.org/10.54499/PTDC/EEI-AUT/1732/2020)) on
-shuttle drones that launch and capture fixed-wing aircraft. Everything needed to train and evaluate its policies and
-to regenerate its tables and figures is included; trained weights and raw logs are not.
+Hybrid-Vehicle Control* (Rodrigo Gomes, Instituto Superior Técnico, Universidade de Lisboa, 2026), within the [CAPTURE
+project](https://capture.isr.tecnico.ulisboa.pt/) on shuttle drones that launch and capture fixed-wing aircraft. 
+Everything needed to train and evaluate its policies and to regenerate its tables and figures is included; 
+trained weights and raw logs are not.
 
 ## What this fork adds to the Pegasus Simulator
 
