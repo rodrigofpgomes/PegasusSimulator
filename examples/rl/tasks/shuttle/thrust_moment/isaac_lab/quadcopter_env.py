@@ -61,7 +61,10 @@ class QuadcopterEnvCfg(PegasusEnvCfg):
     distance_reward_denominator: float = 1.5
 
     # Vehicle Params
-    thrust_to_weight: float = 1.9 
+    thrust_to_weight: float = 1.9
+    # False: T = k_T m g (a0 + 1) / 2 (original task). True: piecewise linear with the hover thrust at a0 = 0,
+    # a0 in [-1, 0] -> [0, m g] and a0 in [0, 1] -> [m g, k_T m g]
+    thrust_hover_centered: bool = False
     moment_scale: float = 0.01
     drone_mass: float = 3.5
     gravity: float = 9.81 
@@ -122,7 +125,12 @@ class QuadcopterEnv(PegasusEnv):
         forces = torch.zeros((self.num_envs, self.parts_per_vehicle, 3), device=self.device)
         torques = torch.zeros((self.num_envs, self.parts_per_vehicle, 3), device=self.device)
 
-        thrust = self.cfg.thrust_to_weight * (self.cfg.drone_mass * self.cfg.gravity) * (self._actions[:, 0] + 1.0) / 2.0
+        weight = self.cfg.drone_mass * self.cfg.gravity
+        a0 = self._actions[:, 0]
+        if self.cfg.thrust_hover_centered:
+            thrust = weight * (1.0 + torch.where(a0 < 0.0, a0, (self.cfg.thrust_to_weight - 1.0) * a0))
+        else:
+            thrust = self.cfg.thrust_to_weight * weight * (a0 + 1.0) / 2.0
 
         forces[:, self._body_index, 2] = thrust
         torques[:, self._body_index, :] = self.cfg.moment_scale * self._actions[:, 1:]

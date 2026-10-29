@@ -10,6 +10,12 @@
 #   ms001_den08 ms001_den15 ms006_den08 ms006_den15 ms012_den08 ms012_den15   moment_scale x denominator
 #   ms012_den08_yaw011 ms012_den08_yaw101   extra yaw-rate penalty 0.1 and 1.0 on the best configuration,
 #                                           i.e. effective wz weight 0.11 and 1.01 (0.01 is ms012_den08)
+#   ms025_den08 ms050_den08 ms100_den08     extension of the moment-scale sweep, opt-in through EXPERIMENTS
+#   ms025_den15 ms050_den15 ms100_den15     the same extension with denominator 1.5, opt-in
+#   ms025_den08_yaw011 ms050_den08_yaw011   yaw-rate weight 0.11 on the extended sweep, opt-in
+#   ms025_den08_yaw101 ms050_den08_yaw101   yaw-rate weight 1.01 on the extended sweep (ms025_den08_yaw101 is the
+#                                           reference configuration of this level), opt-in
+#   *_hc                                    thrust_hover_centered=True (hover at a0 = 0), meant for KT=3.9, opt-in
 # Layout:
 #   $ROOT/<experiment>/train/<experiment>_sNN/   training run (run_metadata.json, checkpoints, CSV export)
 #   $ROOT/<experiment>/eval/<experiment>_sNN/    deterministic evaluation (steps.npz with actions, episodes.csv)
@@ -47,6 +53,21 @@ declare -A CFG=(
   [ms012_den15]="moment_scale=0.12 distance_reward_denominator=1.5"
   [ms012_den08_yaw011]="moment_scale=0.12 distance_reward_denominator=0.8 yaw_rate_reward_scale=-0.1"
   [ms012_den08_yaw101]="moment_scale=0.12 distance_reward_denominator=0.8 yaw_rate_reward_scale=-1.0"
+  [ms025_den08]="moment_scale=0.25 distance_reward_denominator=0.8"
+  [ms050_den08]="moment_scale=0.5 distance_reward_denominator=0.8"
+  [ms100_den08]="moment_scale=1.0 distance_reward_denominator=0.8"
+  [ms025_den15]="moment_scale=0.25 distance_reward_denominator=1.5"
+  [ms050_den15]="moment_scale=0.5 distance_reward_denominator=1.5"
+  [ms100_den15]="moment_scale=1.0 distance_reward_denominator=1.5"
+  [ms025_den08_yaw011]="moment_scale=0.25 distance_reward_denominator=0.8 yaw_rate_reward_scale=-0.1"
+  [ms025_den08_yaw101]="moment_scale=0.25 distance_reward_denominator=0.8 yaw_rate_reward_scale=-1.0"
+  [ms050_den08_yaw011]="moment_scale=0.5 distance_reward_denominator=0.8 yaw_rate_reward_scale=-0.1"
+  [ms050_den08_yaw101]="moment_scale=0.5 distance_reward_denominator=0.8 yaw_rate_reward_scale=-1.0"
+  [ms006_den08_hc]="moment_scale=0.06 distance_reward_denominator=0.8 thrust_hover_centered=True"
+  [ms012_den08_hc]="moment_scale=0.12 distance_reward_denominator=0.8 thrust_hover_centered=True"
+  [ms012_den15_hc]="moment_scale=0.12 distance_reward_denominator=1.5 thrust_hover_centered=True"
+  [ms012_den08_yaw101_hc]="moment_scale=0.12 distance_reward_denominator=0.8 yaw_rate_reward_scale=-1.0 thrust_hover_centered=True"
+  [ms025_den08_yaw101_hc]="moment_scale=0.25 distance_reward_denominator=0.8 yaw_rate_reward_scale=-1.0 thrust_hover_centered=True"
 )
 for exp in "${!CFG[@]}"; do CFG[$exp]="${CFG[$exp]} thrust_to_weight=$KT"; done
 ORDER="ms001_den08 ms001_den15 ms006_den08 ms006_den15 ms012_den08 ms012_den15 ms012_den08_yaw011 ms012_den08_yaw101"

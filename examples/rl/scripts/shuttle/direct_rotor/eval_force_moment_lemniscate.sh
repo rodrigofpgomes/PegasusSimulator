@@ -14,16 +14,17 @@
 # Usage (from the repository root, inside tmux or nohup):
 #   examples/rl/scripts/shuttle/direct_rotor/eval_force_moment_lemniscate.sh
 #   SEEDS="3" LEVELS="2" examples/rl/scripts/shuttle/direct_rotor/eval_force_moment_lemniscate.sh --dry-run
-# Environment: EXPERIMENT, SEEDS (default 1..10), LEVELS (default "0.5 1 2 3 4 5 6 8 10"), N_EVAL_ENVS (4), DURATION (20),
-#              EVAL_SEED (1000), ZERO_VEL_SEEDS (default "3").
+# Environment: EXPERIMENT, STUDY (logs folder, default study_10seeds; study_10seeds_kt3p9 for k_T = 3.9), OUT (set it for any EXPERIMENT other than the default), SEEDS (default 1..10), LEVELS (default "0.5 1 2 3 4 5 6 8 10"), N_EVAL_ENVS (4), DURATION (20),
+#              EVAL_SEED (1000), ZERO_VEL_SEEDS (default "3", empty for none).
 set -u
 REPO="$(git -C "$(dirname "${BASH_SOURCE[0]}")" rev-parse --show-toplevel)"; PY="${ISAACSIM_PYTHON:-$HOME/isaacsim_5.1.0/python.sh}"
 TASK="shuttle/thrust_moment/isaac_lab"
 EXPERIMENT="${EXPERIMENT:-ms012_den08_yaw101}"
-SRC="$REPO/examples/rl/tasks/$TASK/logs/study_10seeds/$EXPERIMENT/train"
-OUT="$REPO/examples/rl/tasks/shuttle/direct_rotor/ablation/raptor_tracking/logs/eval_lemniscate_fm"
+STUDY="${STUDY:-study_10seeds}"
+SRC="$REPO/examples/rl/tasks/$TASK/logs/$STUDY/$EXPERIMENT/train"
+OUT="${OUT:-$REPO/examples/rl/tasks/shuttle/direct_rotor/ablation/raptor_tracking/logs/eval_lemniscate_fm}"
 SEEDS="${SEEDS:-1 2 3 4 5 6 7 8 9 10}"; LEVELS="${LEVELS:-0.5 1 2 3 4 5 6 8 10}"
-N="${N_EVAL_ENVS:-4}"; DUR="${DURATION:-20}"; SEED="${EVAL_SEED:-1000}"; ZERO="${ZERO_VEL_SEEDS:-3}"
+N="${N_EVAL_ENVS:-4}"; DUR="${DURATION:-20}"; SEED="${EVAL_SEED:-1000}"; ZERO="${ZERO_VEL_SEEDS-3}"
 DRY=0; [ "${1:-}" = "--dry-run" ] && DRY=1
 export PYTHONUNBUFFERED=1; cd "$REPO"; failed=0
 
