@@ -40,15 +40,20 @@ deterministic. The evaluations use a fixed seed (1000), so all policies of a sec
 ## 2. Shuttle - thrust and moment control
 
 ```bash
-examples/rl/scripts/shuttle/thrust_moment/run_isaac_lab_study.sh            # k_T = 1.9, 8 configurations x 10 seeds
-KT=3.9 examples/rl/scripts/shuttle/thrust_moment/run_isaac_lab_study.sh     # k_T = 3.9 (sensitivity test)
+T=examples/rl/scripts/shuttle/thrust_moment/run_isaac_lab_study.sh
+$T                                                                           # k_T = 1.9, 8 configurations x 10 seeds
+EXPERIMENTS="ms025_den08 ms050_den08 ms100_den08 ms025_den15 ms050_den15 ms100_den15 \
+  ms025_den08_yaw011 ms025_den08_yaw101 ms050_den08_yaw011 ms050_den08_yaw101" $T   # extended moment-scale sweep
+KT=3.9 $T                                                                    # k_T = 3.9 (sensitivity test)
+KT=3.9 EXPERIMENTS="ms025_den08_yaw101 ms006_den08_hc ms012_den08_hc ms012_den15_hc ms012_den08_yaw101_hc \
+  ms025_den08_yaw101_hc" $T                                                  # k_T = 3.9, hover command at a0 = 0
 python3 results/shuttle/isaac_lab_study/export_results.py                   # -> results/shuttle/isaac_lab_study/data
 # MATLAB, in results/shuttle/isaac_lab_study:  plot_results
 ```
 
 Each run trains PPO2 for 200 iterations (4096 vehicles, about 80 s on one GPU) and evaluates the final checkpoint on
-200 goals. Check: with c_M = 0.12, c_D = 0.8 and w_psi = 1.01 the final error is about 0.018 m, the RMSE 0.449 m and
-t20 1.37 s (mean over ten seeds).
+200 goals (320 runs in total, two of which fail with c_M = 0.01). Check: with the reference configuration c_M = 0.25,
+c_D = 0.8 and w_psi = 1.01 the final error is about 0.020 m, the RMSE 0.417 m and t20 1.17 s (mean over ten seeds).
 
 ## 3. Shuttle - acceleration control
 
@@ -65,6 +70,18 @@ The study script also writes `outer_loop_by_run.csv` (`summarize_outer_loop_eval
 the quadratic reward terminates every episode (survival 0), the constant, death-penalty and exponential rewards
 survive every episode with a discounted return about 10 % below the LQR (G_LQR = -24.57).
 
+Classical cascaded controller (position outer loop with the LQR gains K_p = 3.15, K_v = 2.37 and geometric attitude
+inner loop) on the Shuttle in Pegasus, for the goal of the example episodes (1.59 m away):
+
+```bash
+results/shuttle/classical_control/run.sh                                   # -> results/shuttle/classical_control/run
+python3 results/shuttle/classical_control/export_results.py                # -> data/episode.csv, data/metrics.json
+# MATLAB, in results/shuttle/classical_control:  plot_results
+```
+
+Check: 2 % settling after 2.8 s in x and y and 3.2 s in z, overshoot 7.4 % (x, y) and 4.2 % (z), final error about
+1 mm after 5 s, thrust between 33.7 and 39.9 N and rotor speeds below 870 rad/s.
+
 ## 4. Shuttle - direct rotor velocity control
 
 ```bash
@@ -79,7 +96,11 @@ $S/run_direct_rotor_ablation.sh                       # reward and observation v
 $S/run_direct_rotor_ablation_extra.sh                 # control runs of the R5 and R6 variants with seeds 1 and 2
 $S/eval_direct_rotor_yaw.sh                           # heading of the ablation policies
 $S/eval_direct_rotor_lemniscate.sh                    # lemniscate, peak acceleration 0.5-10 m/s^2
-$S/eval_force_moment_lemniscate.sh                    # the thrust-and-moment policies on the lemniscate
+EXPERIMENT=ms025_den08_yaw101 OUT=examples/rl/tasks/shuttle/direct_rotor/ablation/raptor_tracking/logs/eval_lemniscate_fm_ms025_den08_yaw101 \
+  $S/eval_force_moment_lemniscate.sh                  # the thrust-and-moment policies on the lemniscate, k_T = 1.9
+EXPERIMENT=ms025_den08_yaw101_hc STUDY=study_10seeds_kt3p9 ZERO_VEL_SEEDS= \
+  OUT=examples/rl/tasks/shuttle/direct_rotor/ablation/raptor_tracking/logs/eval_lemniscate_fm_ms025_den08_yaw101_hc_kt3p9 \
+  $S/eval_force_moment_lemniscate.sh                  # ... k_T = 3.9 with the hover command at a0 = 0
 results/shuttle/rotor_velocities/make_results.sh      # checkpoint evaluations, export, figures (matplotlib)
 ```
 
@@ -98,13 +119,20 @@ on the lemniscate at 2 m/s^2 the reference acceleration in the observation lower
 
 ## 5. Shuttle-Glider
 
-Policies: `base` (B), `wls_ema` (F, filtered differential) and `wls_ema_m02` (M, retained), seed 3, 5000 iterations.
+Policies: `base` (B), `wls_ema` (F, filtered differential) and `wls_ema_m02` (M, retained), seed 3 (seeds 1 and 2 for
+the dispersion between seeds), 5000 iterations.
 
 ```bash
 G=examples/rl/scripts/shuttle_glider
 VARIANTS="base wls_ema wls_ema_m02" $G/run_tracking.sh                     # training (about 35 min per policy)
+SEEDS="1 2" VARIANTS="base wls_ema wls_ema_m02" $G/run_tracking.sh        # seeds 1 and 2 of the three policies
+SEEDS="1 2 3" VARIANTS="base wls_ema wls_ema_m02" REGIMES="hover mixed accel_v5 accel_v9 accel_v13 decel_v5_0 \
+  decel_v9_0 decel_v13_9 cruise_v3 cruise_v7 cruise_v11 cruise_v14 turn_v8_r25 turn_v10_r40 turn_v12_r30 turn_v14_r40 \
+  climb_v0_z1 climb_v10_z1 climb_v10_z-1 helix_v12_r30_z1" $G/eval_tracking.sh   # 19 regimes and the helix, seeds 1-3
+                                                                           # -> logs/variants/regimes_summary.csv
 # reward variants of the variant table (one seed each):
-VARIANTS="power01 power02 dact025 rate0 surfq conflict surfq_conflict conflict_alloc alloc wls wls_q wls_ema_m" $G/run_tracking.sh
+VARIANTS="power01 power02 dact025 rate0 surfq conflict surfq_conflict conflict_alloc alloc wls wls_q wls_ema_m nolarge" \
+  $G/run_tracking.sh
 
 # regimes of the regime table and of the steady-flight figure (200 vehicles, t >= 3 s)
 OUT_ROOT=examples/rl/tasks/shuttle_glider/tracking/logs/regime_figures VARIANTS="base wls_ema wls_ema_m02" \
@@ -114,30 +142,32 @@ REGIMES="hover mixed accel_v5 accel_v9 accel_v13 decel_v5_0 decel_v9_0 decel_v13
   $G/eval_tracking.sh
 results/shuttle_glider/tracking_regimes/eval_regimes.sh                    # deceleration and helix episodes
 
-# missions at 12 and 14 m/s (true state)
-TRAIN_VARIANTS=" " EVAL_VARIANTS=" " MISSION_VARIANTS="base wls_ema wls_ema_m02" $G/run_round.sh
+# missions at 12 and 14 m/s (true state) of every policy of the variant table -> logs/variants/missions_summary.csv
+TRAIN_VARIANTS=" " EVAL_VARIANTS=" " MISSION_VARIANTS="base wls_ema wls_ema_m02 power01 power02 dact025 rate0 surfq \
+  conflict surfq_conflict conflict_alloc alloc wls wls_q wls_ema_m nolarge" $G/run_round.sh
 
 # surface ablation of the base policy (surface commands replaced by the trim or by zero)
 $G/run_surface_ablation.sh
 ```
 
-Mission with the PX4 state estimate. Install the airframes first: copy
-`examples/rl/px4_vehicles/10050_none_shuttle` and `10051_none_shuttle_glider` to
+Mission with the PX4 state estimate. Install the airframes first: copy `10050_none_shuttle`,
+`10051_none_shuttle_glider`, `10053_none_shuttle_glider_baro`, `10055_none_shuttle_glider_inair` and
+`10058_none_shuttle_glider_baro_inair` from `examples/rl/px4_vehicles` to
 `PX4-Autopilot/ROMFS/px4fmu_common/init.d-posix/airframes/`, add them to the `CMakeLists.txt` of that folder and run
-`make px4_sitl_default` in PX4-Autopilot. Then, for `CONFIG` in `shuttle_glider_true_state`,
-`px4_shuttle_glider_estimator` and `px4_shuttle_glider_estimator_gps_nodrift`, with `CASE` = `mission`, `mission_px4`
-and `mission_px4_gps_nodrift`:
+`make px4_sitl_default` in PX4-Autopilot. Then fly the mission at 12 m/s with the true state, with the PX4 estimate
+from gazebo-classic sensors (GPS height reference) and from a standard GNSS receiver without RTK (barometric height
+reference); in both PX4 flights the backend arms PX4 after the EKF warmup, so that EKF2 fuses airspeed and sideslip:
 
 ```bash
-"$ISAACSIM_PYTHON" examples/rl/play_multi.py --config examples/rl/configs/$CONFIG.json \
-  --trajectory mission --traj_speed 12 --traj_radius 50 --traj_a_max 3 --mission_decel_amax 0.7 \
-  --episode_duration 101 --traj_z 10 --spawn-altitude 10 --mission_climb 10 --mission_climb_rate 1.0 \
-  --n_envs 1 --headless --record --failure-distance 1000 \
-  --record_dir examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/$CASE/mission_v12alt_s03
+examples/rl/scripts/shuttle_glider/run_px4_mission.sh
+python3 results/shuttle_glider/tracking_regimes/alpha_beta_error.py \
+  examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/mission_px4_height_ref/*/mission_v12alt_s03
 ```
 
-(For the appendix flights of the base policy, use copies of the three manifests with `wls_ema_m02` replaced by
-`base` and record to `variants/base/...`.)
+(The appendix flights of the base policy use the earlier configurations `px4_shuttle_glider_estimator` and
+`px4_shuttle_glider_estimator_gps_nodrift`, PX4 disarmed, with the `play_multi.py` arguments of `run_px4_mission.sh`,
+a copy of `shuttle_glider_true_state.json` with `wls_ema_m02` replaced by `base`, and `--record_dir`
+`examples/rl/tasks/shuttle_glider/tracking/logs/variants/base/{mission,mission_px4,mission_px4_gps_nodrift}/mission_v12alt_s03`.)
 
 Tables, figures and analyses:
 
@@ -151,11 +181,14 @@ python3 results/shuttle_glider/tracking_regimes/export_results.py          # -> 
 
 The variant table (missions and Delta Omega) is in `examples/rl/tasks/shuttle_glider/tracking/logs/variants/
 missions_summary.csv`, written by `run_round.sh`. Check: the three policies survive every regime with an RMSE below
-2.4 cm; the minimum-power trim falls from 663.6 W in hover to 45.8 W at 14 m/s; with the PX4 estimate the retained
-policy completes the mission, tracking the estimated position within about 12 cm.
+2.4 cm with seed 3, and the retained policy stays within 7.9 cm over seeds 1-3; the minimum-power trim falls from
+663.6 W in hover to 45.8 W at 14 m/s; with the PX4 estimate the retained policy completes the mission, tracking the
+estimated position within 3.6 cm (gazebo-classic sensors) and 4.8 cm (GNSS), with a true-position error of 0.44 and
+0.86 m.
 
 Mission video (Lake World): run the `video_mission_v12_px4` flight of
-`examples/rl/scripts/shuttle_glider/manifests/tracking_wls_ema_m02_px4_video.json`, then
+`examples/rl/scripts/shuttle_glider/manifests/tracking_wls_ema_m02_px4_video_gnss.json` (the three state sources of the
+mission above at once; `tracking_wls_ema_m02_px4_video.json` holds the earlier PX4 configurations), then
 `python3 examples/rl/scripts/shuttle_glider/video/compose_mission_video.py <record_dir>`.
 
 ## 6. EasyGlider

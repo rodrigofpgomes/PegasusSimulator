@@ -27,8 +27,9 @@ trained weights and raw logs are not.
   aerodynamic model with control surfaces and a puller propeller, and the Shuttle-Glider assembly; binary USD assets
   and a Lake World environment.
 - **PX4 state estimation**: a backend that replaces the true state given to a trained policy by the EKF2 estimate of
-  PX4 SITL running in lockstep with simulated IMU, GPS, barometer, magnetometer and airspeed sensors, with airframes
-  for the Shuttle and the Shuttle-Glider.
+  PX4 SITL running in lockstep with simulated IMU, GPS, barometer, magnetometer and airspeed sensors (optionally with
+  the statistics and GPS delay of the PX4 gazebo-classic plugins, and with PX4 armed after the EKF warmup so that EKF2
+  fuses airspeed and sideslip), with airframes for the Shuttle and the Shuttle-Glider.
 - **Tasks, scripts and results**: the RL tasks (`examples/rl/tasks`), the training and evaluation scripts
   (`examples/rl/scripts`) and the scripts that export the tables and draw the figures (`results/`).
 - Fixes to the original backends and sensors (quaternion convention, GPS and barometer noise, sensor timing); see the
