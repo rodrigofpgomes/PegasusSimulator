@@ -1,0 +1,13 @@
+#!/bin/sh
+#
+# @name Pegasus Shuttle-Glider SITL (estimator only, barometric height reference)
+# @type Plane
+#
+# Identical to 10051_none_shuttle_glider except that the EKF2 height reference is the barometer instead of
+# the GPS (EKF2_HGT_REF default 1 in PX4 v1.14). Both sources are still fused; the GPS height bias is then
+# estimated against the barometer instead of the reverse.
+#
+
+. ${R}etc/init.d-posix/airframes/10051_none_shuttle_glider
+
+param set-default EKF2_HGT_REF 0

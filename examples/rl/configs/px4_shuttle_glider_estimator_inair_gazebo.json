@@ -1,0 +1,70 @@
+{
+  "vehicle": "shuttle_glider2",
+  "vehicles": [
+    {
+      "name": "glider_px4_estimate",
+      "type": "ppo2",
+      "task": "shuttle_glider/tracking",
+      "preset": "default",
+      "checkpoint": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/checkpoints/agent_120000.pt",
+      "run_metadata": "examples/rl/tasks/shuttle_glider/tracking/logs/variants/wls_ema_m02/train/s03/*_PPO2/run_metadata.json",
+      "px4": {
+        "mode": "estimator",
+        "px4_autolaunch": true,
+        "px4_vehicle_model": "none_shuttle_glider_inair",
+        "num_rotors": 5,
+        "motor_order": [
+          0,
+          1,
+          2,
+          3,
+          4
+        ],
+        "airspeed": {
+          "diff_pressure_stddev": 0.01
+        },
+        "vehicle_id": 0,
+        "sensor_seed": 0,
+        "warmup_timeout_s": 60.0,
+        "warmup_stable_s": 2.0,
+        "log_sensors": false,
+        "imu": {
+          "gyroscope": {
+            "noise_density": 0.00018665,
+            "random_walk": 3.8785e-05,
+            "bias_correlation_time": 1000.0,
+            "turn_on_bias_sigma": 0.0087
+          },
+          "accelerometer": {
+            "noise_density": 0.00186,
+            "random_walk": 0.006,
+            "bias_correlation_time": 300.0,
+            "turn_on_bias_sigma": 0.196
+          },
+          "apply_turn_on_bias": true
+        },
+        "gps": {
+          "gps_xy_random_walk": 0.01081,
+          "gps_z_random_walk": 0.02162,
+          "gps_correlation_time": 1.2289,
+          "gps_xy_noise_density": 2e-05,
+          "gps_z_noise_density": 4e-05,
+          "gps_vxy_noise_density": 0.02,
+          "gps_vz_noise_density": 0.04,
+          "delay_s": 0.12,
+          "earth_radius": 6371000.0,
+          "float64": true
+        },
+        "magnetometer": {
+          "noise_density": 0.0004,
+          "random_walk": 6.4e-06,
+          "bias_correlation_time": 600.0
+        },
+        "barometer": {
+          "drift_pa_per_sec": 0.0
+        },
+        "arm_after_warmup": true
+      }
+    }
+  ]
+}

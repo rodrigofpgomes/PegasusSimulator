@@ -1,0 +1,12 @@
+#!/bin/sh
+#
+# @name Pegasus Shuttle-Glider SITL (estimator only, armed: barometric height reference)
+# @type Plane
+#
+# 10053_none_shuttle_glider_baro (EKF2_HGT_REF 0, GPS height still fused) for runs in which Pegasus force-arms PX4
+# after the EKF warmup, as 10055_none_shuttle_glider_inair: auto-disarm on landing disabled.
+#
+
+. ${R}etc/init.d-posix/airframes/10053_none_shuttle_glider_baro
+
+param set-default COM_DISARM_LAND -1

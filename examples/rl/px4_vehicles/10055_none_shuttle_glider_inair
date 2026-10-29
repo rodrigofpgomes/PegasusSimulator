@@ -1,0 +1,14 @@
+#!/bin/sh
+#
+# @name Pegasus Shuttle-Glider SITL (estimator only, armed: GPS height reference)
+# @type Plane
+#
+# Identical to 10051_none_shuttle_glider, for runs in which Pegasus force-arms PX4 after the EKF warmup (estimator config
+# arm_after_warmup): armed, the fixed-wing land detector reports flight above LNDFW_AIRSPD_MAX and EKF2 then fuses
+# airspeed and sideslip. Auto-disarm on landing is disabled so the final hover does not disarm
+# (COM_DISARM_PRFLT is already -1 in rc.fw_defaults). PX4 outputs remain unused.
+#
+
+. ${R}etc/init.d-posix/airframes/10051_none_shuttle_glider
+
+param set-default COM_DISARM_LAND -1

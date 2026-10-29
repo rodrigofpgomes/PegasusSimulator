@@ -51,7 +51,8 @@ class PX4MavlinkEstimatorBackend(PX4MavlinkBackend):
         Config keys (all optional): vehicle_id, px4_autolaunch, px4_dir,
         px4_vehicle_model, telemetry_baseport, system_id, component_id,
         motor_order, estimate_delay_s, warmup_timeout_s, warmup_stable_s,
-        activation_timeout_s, lockstep_timeout_s, log_sensors and the sensor
+        activation_timeout_s, lockstep_timeout_s, log_sensors, arm_after_warmup (estimator mode: force-arm
+        PX4 after the warmup so that EKF2 fuses airspeed and sideslip in flight) and the sensor
         settings read by SensorSuiteBatch (imu, gps, barometer, magnetometer).
         """
         vehicle_id = int(config.get("vehicle_id", 0))
@@ -369,7 +370,9 @@ class PX4MavlinkEstimatorBackend(PX4MavlinkBackend):
             try:
                 self.buffer.snapshot(self._estimate_target())
                 good_since = now if good_since is None else good_since
-                if now - good_since >= stable:
+                if now - good_since >= stable and self.config.get("arm_after_warmup", False) and not self.armed:
+                    self.request_force_arm()
+                elif now - good_since >= stable:
                     self.buffer.align_position_origin(self.vehicle.state.position[0], self._estimate_target())
                     state, self.current_stamp = self.buffer.snapshot(self._estimate_target())
                     self.current = state.to(self.vehicle.device)
@@ -441,6 +444,16 @@ class PX4MavlinkEstimatorBackend(PX4MavlinkBackend):
         if not self.armed:
             self.telemetry.mav.command_long_send(self.buffer.system_id, self.buffer.component_id,
                                                  400, 0, 1, 0, 0, 0, 0, 0, 0)
+
+    def request_force_arm(self) -> None:
+        """Estimator mode with arm_after_warmup: force-arm (400, param2 21196 skips the preflight checks) at most once
+        per simulated second. PX4 outputs stay unused; arming only lets the land detector report flight, which EKF2
+        needs to fuse airspeed and sideslip."""
+        if self._current_utime - self._last_mode_request_usec < 1_000_000:
+            return
+        self._last_mode_request_usec = self._current_utime
+        self.telemetry.mav.command_long_send(self.buffer.system_id, self.buffer.component_id,
+                                             400, 0, 1, 21196, 0, 0, 0, 0, 0)
 
     def motor_velocities(self) -> torch.Tensor:
         """Rotor speeds [rad/s] from the PX4 outputs of the current lockstep sample."""

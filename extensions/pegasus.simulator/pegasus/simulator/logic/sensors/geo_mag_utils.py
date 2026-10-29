@@ -68,7 +68,7 @@ SAMPLING_MAX_LAT = 60  # deg
 SAMPLING_MIN_LON = -180  # deg
 SAMPLING_MAX_LON = 180  # deg
 
-EARTH_RADIUS = 6353000.0  # meters
+EARTH_RADIUS = 6353000.0  # meters, as gazebo-classic common.h (PX4 projects with 6371000)
 
 # Gravity vector expressed in ENU
 GRAVITY_VECTOR = [0.0, 0.0, -9.80665]  # m/s^2
@@ -139,7 +139,7 @@ def get_mag_strength(latitude: torch.Tensor, longitude: torch.Tensor):
     return get_table_data(latitude, longitude, _STRENGTH_TABLE_T)
 
 
-def reprojection(position: torch.Tensor, origin_lat=-999, origin_long=-999):
+def reprojection(position: torch.Tensor, origin_lat=-999, origin_long=-999, earth_radius=EARTH_RADIUS):
     """
     Compute the latitude and longitude coordinates from a local position
     """
@@ -148,8 +148,8 @@ def reprojection(position: torch.Tensor, origin_lat=-999, origin_long=-999):
     origin_long = torch.as_tensor(origin_long, dtype=position.dtype, device=position.device)
 
     # reproject local position to gps coordinates
-    x_rad: torch.Tensor = position[1] / EARTH_RADIUS  # north
-    y_rad: torch.Tensor = position[0] / EARTH_RADIUS  # east
+    x_rad: torch.Tensor = position[1] / earth_radius  # north
+    y_rad: torch.Tensor = position[0] / earth_radius  # east
     c: torch.Tensor = torch.sqrt(x_rad * x_rad + y_rad * y_rad)
     sin_c: torch.Tensor = torch.sin(c)
     cos_c: torch.Tensor = torch.cos(c)

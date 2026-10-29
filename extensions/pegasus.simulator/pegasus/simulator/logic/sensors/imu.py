@@ -38,7 +38,8 @@ class IMU(Sensor):
             >>>         "bias_correlation_time": 300.0,
             >>>         "turn_on_bias_sigma": 20.0e-3 * 9.8
             >>> },
-            >>>  "update_rate": 1.0}                 # Hz
+            >>>  "update_rate": 1.0,                 # Hz
+            >>>  "apply_turn_on_bias": False}        # start the biases at N(0, turn_on_bias_sigma), as gazebo
         """
 
         # Initialize the Super class "object" attributes
@@ -100,6 +101,10 @@ class IMU(Sensor):
             device=self.device
         )
 
+        # The gazebo IMU plugin draws the initial biases from the turn-on sigmas; here it is opt-in and done in the
+        # first update, so that the draw comes from the caller's random stream
+        self._turn_on_bias_pending: bool = bool(config.get("apply_turn_on_bias", False))
+
         # Auxiliar variable used to compute the linear acceleration of the vehicle
         self._prev_linear_velocity: torch.Tensor = torch.zeros(3, dtype=torch.float32, device=self.device)        
 
@@ -133,6 +138,12 @@ class IMU(Sensor):
         Returns:
             (dict) A dictionary containing the current state of the sensor (the data produced by the sensor)
         """
+
+        if self._turn_on_bias_pending:
+            self._turn_on_bias_pending = False
+            for i in range(3):
+                self._gyroscope_bias[i] = self._gyroscope_turn_on_bias_sigma * torch.randn((), device=self.device)
+                self._accelerometer_bias[i] = self._accelerometer_turn_on_bias_sigma * torch.randn((), device=self.device)
 
         # Gyroscopic terms
         tau_g: torch.Tensor = self._gyroscope_bias_correlation_time

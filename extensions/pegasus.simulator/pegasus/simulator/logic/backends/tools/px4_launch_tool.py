@@ -7,6 +7,7 @@
 
 # System tools used to launch the px4 process in the brackground
 import os
+import shutil
 import tempfile
 import subprocess
 
@@ -69,7 +70,19 @@ class PX4LaunchTool:
         """
         if self.px4_process is not None:
             self.px4_process.kill()
+            self.px4_process.wait()
             self.px4_process = None
+            self._keep_logs()
+
+    def _keep_logs(self):
+        """
+        Copy the PX4 logs (ulog) out of the temporary filesystem before it is deleted, when the environment variable
+        PEGASUS_PX4_LOG_DIR is set (opt-in; they go to $PEGASUS_PX4_LOG_DIR/px4_<vehicle_id>/)
+        """
+        dest = os.environ.get("PEGASUS_PX4_LOG_DIR")
+        src = os.path.join(self.root_fs.name, "log")
+        if dest and os.path.isdir(src):
+            shutil.copytree(src, os.path.join(dest, f"px4_{self.vehicle_id}"), dirs_exist_ok=True)
 
     def __del__(self):
         """

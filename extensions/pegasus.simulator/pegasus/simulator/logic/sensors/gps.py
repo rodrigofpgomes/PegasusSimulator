@@ -10,7 +10,7 @@ __all__ = ["GPS"]
 import torch
 
 from pegasus.simulator.logic.sensors import Sensor
-from pegasus.simulator.logic.sensors.geo_mag_utils import reprojection
+from pegasus.simulator.logic.sensors.geo_mag_utils import reprojection, EARTH_RADIUS
 
 class GPS(Sensor):
     """The class that implements a GPS sensor. This class inherits the base class Sensor.
@@ -36,6 +36,8 @@ class GPS(Sensor):
             >>>  "gps_vxy_noise_density": 0.2,      # (m/s) / sqrt(hz)
             >>>  "gps_vz_noise_density": 0.4,       # (m/s) / sqrt(hz)
             >>>  "gps_correlation_time": 60,        # s
+            >>>  "earth_radius": 6353000.0,         # m, of the local-to-geodetic projection (gazebo-classic); PX4 uses 6371000
+            >>>  "float64": False,                  # project the position into latitude and longitude in double precision
             >>>  "update_rate": 1.0                 # Hz
             >>> }
         """
@@ -70,6 +72,12 @@ class GPS(Sensor):
         # Parameters for the GPS bias
         self._gps_bias = torch.zeros(3, dtype=torch.float32, device=device)
         self._gps_correlation_time = torch.tensor(config.get("gps_correlation_time", 60), dtype=torch.float32, device=device)
+
+        # Radius of the projection of the position into latitude and longitude. The default is that of the gazebo-classic
+        # GPS plugin; PX4 projects back with 6371000 m, so the default scales the measured position by 0.28 %
+        self._earth_radius = float(config.get("earth_radius", EARTH_RADIUS))
+        # In float32 the latitude in degrees has a resolution of about 0.4 m (gazebo and PX4 use double)
+        self._float64 = bool(config.get("float64", False))
 
         # Save the current state measured by the GPS (and initialize at the origin)
         self._state = {
@@ -139,11 +147,15 @@ class GPS(Sensor):
 
         # reproject position with noise into geographic coordinates
         pos_with_noise: torch.Tensor = state.position + self._noise_gps_pos + self._gps_bias
-        latitude, longitude = reprojection(pos_with_noise, torch.deg2rad(self._origin_lat), torch.deg2rad(self._origin_lon))
+        origin_lat, origin_lon = self._origin_lat, self._origin_lon
+        if self._float64:
+            pos_with_noise, origin_lat, origin_lon = pos_with_noise.double(), origin_lat.double(), origin_lon.double()
+        origin_lat, origin_lon = torch.deg2rad(origin_lat), torch.deg2rad(origin_lon)
+        latitude, longitude = reprojection(pos_with_noise, origin_lat, origin_lon, self._earth_radius)
 
         # Compute the values of the latitude and longitude without noise (for groundtruth measurements)
         latitude_gt, longitude_gt = reprojection(
-            state.position, torch.deg2rad(self._origin_lat), torch.deg2rad(self._origin_lon)
+            state.position, torch.deg2rad(self._origin_lat), torch.deg2rad(self._origin_lon), self._earth_radius
         )
 
         # Add noise to the velocity expressed in the world frame
