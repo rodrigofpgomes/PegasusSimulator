@@ -1265,8 +1265,10 @@ def parse_args():
     p.add_argument("--trail", type=float, default=0.0, metavar="SECONDS",
                    help="Draw the last SECONDS of each controller's env-0 path in its manifest 'color' (hex, e.g. '#ff3b30'). "
                         "A manifest 'color' also tints that controller's glider wing.")
-    p.add_argument("--goal-marker-color", default="#ff0000", help="Colour (hex) of the cube at the current reference position.")
-    p.add_argument("--line-width", type=float, default=2.0, help="Width of the reference line [px]; trails are 1.5x wider.")
+    p.add_argument("--goal-marker-color", default="#ff0000",
+                   help="Colour (hex) of the cube at the current reference position; 'none' hides it.")
+    p.add_argument("--line-width", type=float, default=2.0,
+                   help="Width of the reference line [px]; trails are 1.5x wider; 0 does not draw the reference.")
     p.add_argument("--video-dir", default=None, metavar="DIR",
                    help="Record the follow camera (needs --follow-camera) as numbered JPEG frames in DIR plus frames.csv; "
                         "works with --headless (examples/rl/utils/video_capture.py). Compose the telemetry and encode with "
@@ -1277,6 +1279,8 @@ def parse_args():
     p.add_argument("--video-subframes", type=int, default=4,
                    help="Renders per frame with physics stopped (real-time anti-aliasing converges).")
     p.add_argument("--video-spp", type=int, default=0, help="> 0: path trace every frame with this many samples per pixel.")
+    p.add_argument("--video-start", type=float, default=0.0,
+                   help="First time [s] recorded by --video-dir (e.g. a single path-traced still without a display).")
     p.add_argument("--video-quality", type=int, default=95, help="JPEG quality of the frames.")
     p.add_argument("--telemetry-overlay", default=False, action="store_true",
                    help="Scrolling plots (speed, ||ep||, rotors, control surfaces) in the top-right of the viewport (examples/rl/utils/telemetry_overlay.py).")
@@ -1304,6 +1308,8 @@ def parse_args():
                    metavar=("LOW", "HIGH"), help="XY goal randomization range around spawn [m]. If omitted, goal = spawn position.")
     p.add_argument("--goal_z_range",  type=float, nargs=2, default=None,
                    metavar=("LOW", "HIGH"), help="Z goal randomization range [m].")
+    p.add_argument("--goal_offset", type=float, nargs=3, default=None, metavar=("DX", "DY", "DZ"),
+                   help="Static goal at this offset from the spawn position [m] (e.g. a goal of the evaluation set).")
 
     # Trajectory tracking
     p.add_argument("--trajectory", choices=["none", "lemniscate", "straight", "forward", "longitudinal", "turn", "helix", "mission"], default="none",
@@ -1498,7 +1504,7 @@ def _build_nonlinear_backend(entry, n_envs, device, physics_dt):
         action_mode=entry.get("action_mode", "rotor_velocity"),
     )
     # Optional geometric-controller gains / dynamics overrides from the manifest.
-    for key in ("Kp", "Kd", "Ki", "Kr", "Kw", "mass", "gravity"):
+    for key in ("Kp", "Kd", "Ki", "Kr", "Kw", "mass", "gravity", "inertia", "log_csv", "com_offset", "heading_axis"):
         if key in entry:
             kwargs[key] = entry[key]
     return NonLinearControllerBackend(**kwargs)
@@ -1968,6 +1974,8 @@ def main():
 
     # Use one backend to draw the shared reference marker for every controller.
     marker_backend = next((b for b in backends_order if hasattr(b, "create_goal_marker")), None)
+    if args.goal_marker_color.lower() == "none":
+        marker_backend = None
 
     # =============================================================================
     # Reference trajectory
@@ -2049,7 +2057,7 @@ def main():
 
     def _draw_trajectory_viewport(traj_obj):
         """Draw env-0 reference path over one episode in the Isaac Sim viewport."""
-        if traj_obj is None or (args.headless and not args.video_dir):
+        if traj_obj is None or (args.headless and not args.video_dir) or args.line_width <= 0:
             return
 
         from isaacsim.util.debug_draw import _debug_draw
@@ -2136,6 +2144,9 @@ def main():
         else:
             reset_manager.reset_envs(torch.arange(n_envs, device=device), randomize_goals=goal_cfg is not None,
                                      init_overrides=cruise)
+        if args.goal_offset is not None:
+            reset_manager._goal_pos[:] = center + torch.tensor(args.goal_offset, dtype=torch.float32, device=device)
+            reset_manager._goal_vel[:] = 0.0
         for backend in backends_order:
             if hasattr(backend, "after_evaluation_reset"):
                 backend.after_evaluation_reset()
@@ -2276,7 +2287,7 @@ def main():
                 for c_name in trails:
                     trails[c_name].append(tuple(float(c) for c in controllers[c_name].state.position[0].detach().cpu()))
 
-            if video is not None and step % video_every == 0:
+            if video is not None and step % video_every == 0 and step * physics_dt >= args.video_start - 1e-9:
                 if trails:
                     _draw_lines_with_trails()
                 video.capture(world.render, step, step * physics_dt)

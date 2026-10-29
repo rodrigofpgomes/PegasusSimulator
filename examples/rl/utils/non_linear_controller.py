@@ -51,6 +51,10 @@ class NonLinearControllerBackend(_BaseBackend):
         mass: float = 1.5,
         gravity: float = 9.81,
         action_mode: str = "rotor_velocity",
+        inertia=None,
+        log_csv: str | None = None,
+        com_offset=None,
+        heading_axis: str = "x",
     ):
         """Store position, velocity and attitude gains for the batched loop."""
         super().__init__(config=None)
@@ -82,6 +86,22 @@ class NonLinearControllerBackend(_BaseBackend):
 
         self._mass = float(mass)
         self._g = float(gravity)
+        # Optional diagonal inertia [kg m^2]: adds the gyroscopic term w x Jw to the torque.
+        self._inertia_cfg = None if inertia is None else list(inertia)
+        self.J = None
+        # Optional CoM position in the body frame [m]: the position fed back is then that of the CoM, whose
+        # velocity PhysX reports, instead of the /body prim origin.
+        self._com_offset_cfg = None if com_offset is None else list(com_offset)
+        self._com_offset = None
+        # Reference direction of the desired attitude: "x" (x_c = [cos psi, sin psi, 0], Mellinger and Kumar) or
+        # "y" (y_c = [-sin psi, cos psi, 0], x_b = y_c x z_b / |y_c x z_b|).
+        if heading_axis not in ("x", "y"):
+            raise ValueError(f"heading_axis must be 'x' or 'y', got {heading_axis!r}")
+        self._heading_axis = heading_axis
+        # Optional CSV of the controller signals of vehicle 0 (thrust, torque, attitude error) at every update.
+        self._log_path = log_csv
+        self._log_file = None
+        self._log_t = 0.0
 
         # Integral of the position error, per vehicle (N, 3).
         self._int = None
@@ -121,6 +141,10 @@ class NonLinearControllerBackend(_BaseBackend):
         self.Ki = torch.diag(torch.tensor(self._Ki_cfg, dtype=torch.float32, device=self._device))
         self.Kr = torch.diag(torch.tensor(self._Kr_cfg, dtype=torch.float32, device=self._device))
         self.Kw = torch.diag(torch.tensor(self._Kw_cfg, dtype=torch.float32, device=self._device))
+        if self._inertia_cfg is not None:
+            self.J = torch.diag(torch.tensor(self._inertia_cfg, dtype=torch.float32, device=self._device))
+        if self._com_offset_cfg is not None:
+            self._com_offset = torch.tensor(self._com_offset_cfg, dtype=torch.float32, device=self._device)
 
         masses = self._vehicle._vehicle_prims.get_masses()
         self._mass = float(torch.as_tensor(masses).reshape(self._n_vehicles, -1)[0].sum())
@@ -130,7 +154,9 @@ class NonLinearControllerBackend(_BaseBackend):
         self._prime_motors()
 
     def stop(self):
-        pass
+        if self._log_file is not None:
+            self._log_file.close()
+            self._log_file = None
 
     def reset(self):
         """Clear control state and restore neutral rotor references."""
@@ -163,6 +189,8 @@ class NonLinearControllerBackend(_BaseBackend):
         quat_wxyz = self._state_cache[:, 6:10]                # (N, 4)  w, x, y, z
         w = self._state_cache[:, 10:13]                       # (N, 3)  body frame
         R = quaternion_to_matrix(quat_wxyz)                   # (N, 3, 3)
+        if self._com_offset is not None:
+            p = p + R @ self._com_offset
 
         # --- references from the reset manager (point/velocity tracking) ---
         p_ref = self._goal_tensor(self.reset_manager.goal_pos, p)   # (N, 3)
@@ -188,10 +216,16 @@ class NonLinearControllerBackend(_BaseBackend):
 
         # --- desired attitude ---
         Z_b_des = F_des / torch.linalg.norm(F_des, dim=1, keepdim=True).clamp_min(1e-6)
-        X_c_des = torch.stack((torch.cos(yaw_ref), torch.sin(yaw_ref), torch.zeros_like(yaw_ref)), dim=1)
-        Z_cross_Xc = torch.cross(Z_b_des, X_c_des, dim=1)
-        Y_b_des = Z_cross_Xc / torch.linalg.norm(Z_cross_Xc, dim=1, keepdim=True).clamp_min(1e-6)
-        X_b_des = torch.cross(Y_b_des, Z_b_des, dim=1)
+        if self._heading_axis == "x":
+            X_c_des = torch.stack((torch.cos(yaw_ref), torch.sin(yaw_ref), torch.zeros_like(yaw_ref)), dim=1)
+            Z_cross_Xc = torch.cross(Z_b_des, X_c_des, dim=1)
+            Y_b_des = Z_cross_Xc / torch.linalg.norm(Z_cross_Xc, dim=1, keepdim=True).clamp_min(1e-6)
+            X_b_des = torch.cross(Y_b_des, Z_b_des, dim=1)
+        else:
+            Y_c_des = torch.stack((-torch.sin(yaw_ref), torch.cos(yaw_ref), torch.zeros_like(yaw_ref)), dim=1)
+            Yc_cross_Z = torch.cross(Y_c_des, Z_b_des, dim=1)
+            X_b_des = Yc_cross_Z / torch.linalg.norm(Yc_cross_Z, dim=1, keepdim=True).clamp_min(1e-6)
+            Y_b_des = torch.cross(Z_b_des, X_b_des, dim=1)
         R_des = torch.stack((X_b_des, Y_b_des, Z_b_des), dim=2)
 
         # Attitude error (body frame).
@@ -211,10 +245,31 @@ class NonLinearControllerBackend(_BaseBackend):
 
         # --- inner loop: body torque ---
         tau = -(e_R @ self.Kr.T) - (e_w @ self.Kw.T)
+        if self.J is not None:
+            tau = tau + torch.cross(w, w @ self.J.T, dim=1)
+
+        if self._log_path is not None:
+            self._log_step(dt, p, p_ref, u_1, tau, R, R_des)
 
         # --- allocation: (thrust, torque) -> per-rotor angular velocities ---
         self._input_ref = self._vehicle.force_and_torques_to_velocities(u_1, tau)
         self._last_input_ref = self._input_ref
+
+    def after_evaluation_reset(self):
+        """Start play_multi episodes in hover: rotors at the speed that balances the weight."""
+        if self._input_ref is None:
+            return
+        self._int.zero_()
+        weight = torch.full((self._n_vehicles,), self._mass * self._g, dtype=torch.float32, device=self._device)
+        omega_hover = self._vehicle.force_and_torques_to_velocities(weight, torch.zeros_like(self._int))
+        self._input_ref[:] = omega_hover
+        self._vehicle._thrusters._input_reference[:] = omega_hover
+        self._vehicle._thrusters._velocity[:] = omega_hover
+        # Each evaluation episode restarts the log (single-episode runs).
+        if self._log_file is not None:
+            self._log_file.close()
+            self._log_file = None
+        self._log_t = 0.0
 
     def update_state(self, state: StateBatch):
         self._state_cache = torch.cat(
@@ -350,6 +405,28 @@ class NonLinearControllerBackend(_BaseBackend):
         self._input_ref[env_ids] = omega_init
         self._vehicle._thrusters._input_reference[env_ids] = omega_init
         self._vehicle._thrusters._velocity[env_ids] = omega_init
+
+    def _log_step(self, dt, p, p_ref, u_1, tau, R, R_des):
+        """Append the signals of vehicle 0 before this update's command is applied."""
+        if self._log_file is None:
+            self._log_file = open(self._log_path, "w")
+            self._log_file.write("t,x,y,z,goal_x,goal_y,goal_z,T,tau_x,tau_y,tau_z,att_err_tr,"
+                                 "roll,pitch,yaw,roll_d,pitch_d,yaw_d\n")
+        R0, Rd0 = R[0], R_des[0]
+        att_err = float(torch.trace(torch.eye(3, device=self._device) - Rd0.T @ R0))
+        row = [self._log_t, *p[0].tolist(), *p_ref[0].tolist(), float(u_1[0]), *tau[0].tolist(), att_err,
+               *self._euler_zyx(R0), *self._euler_zyx(Rd0)]
+        self._log_file.write(",".join(f"{v:.9g}" for v in row) + "\n")
+        self._log_file.flush()
+        self._log_t += dt
+
+    @staticmethod
+    def _euler_zyx(R: torch.Tensor) -> list:
+        """Roll, pitch, yaw [rad] of a rotation matrix (ZYX convention)."""
+        pitch = float(torch.asin(torch.clamp(-R[2, 0], -1.0, 1.0)))
+        roll = float(torch.atan2(R[2, 1], R[2, 2]))
+        yaw = float(torch.atan2(R[1, 0], R[0, 0]))
+        return [roll, pitch, yaw]
 
     @staticmethod
     def vee_batch(S: torch.Tensor) -> torch.Tensor:
