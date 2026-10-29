@@ -57,35 +57,34 @@ end
 %% =============================================================== figures
 
 function fig1SacTraining(S, T, E, figDir, doSave)
-% SAC: position error and survival against the transitions (training and deterministic evaluation).
+% SAC: position error and survival against the transitions (training and deterministic evaluation), one legend above.
 Ts = sortrows(T(T.variant == "sac", :), 'transitions');
 Es = sortrows(E(E.variant == "sac", :), 'transitions');
 x = Ts.transitions / 1e6;
 xe = Es.transitions / 1e6;
 [f, tl] = twoPanels(S);
+h = gobjects(1, 3);
 
 ax = nexttile(tl); hold(ax, 'on');
-h = gobjects(1, 3);
 h(1) = plot(ax, x, Ts.final_distance_m, '.', 'Color', S.light, 'MarkerSize', 5);
-h(2) = plot(ax, x, movmedian(Ts.final_distance_m, 25, 'omitnan'), '-', 'Color', S.sac, 'LineWidth', 1.1);
-h(3) = plot(ax, xe, Es.err_final_cm / 100, '-o', 'Color', S.green, 'LineWidth', 1.3, 'MarkerSize', 4, ...
-    'MarkerFaceColor', S.green);
-set(ax, 'YScale', 'log'); ylim(ax, [0.02 2]); xlim(ax, [0 1]);
-xlabel(ax, 'Transitions [$\times 10^{6}$]'); ylabel(ax, 'Position error [m]');
+h(2) = plot(ax, x, movmedian(Ts.final_distance_m, 25, 'omitnan'), '-', 'Color', S.blue, 'LineWidth', 1.1);
+h(3) = plot(ax, xe, Es.err_final_cm / 100, '-o', 'Color', S.orange, 'LineWidth', 1.3, 'MarkerSize', 4, ...
+    'MarkerFaceColor', S.orange);
+set(ax, 'YScale', 'log'); ylim(ax, [0.035 1.5]); xlim(ax, [0 1]);
+xlabel(ax, 'Transitions [$\times 10^{6}$]'); ylabel(ax, '$\|\mathbf{e}_p\|$ [m]');
 title(ax, '(a) Position error', 'FontWeight', 'normal');
 formatAxis(ax, S);
-legend(ax, h, {'Training episodes (end of episode)', 'Training, moving median', 'Evaluation, last 2\,s'}, ...
-    'Location', 'northeast', 'Box', 'off', 'Interpreter', 'latex');
 
 ax = nexttile(tl); hold(ax, 'on');
-h = gobjects(1, 2);
-h(1) = plot(ax, x, movmean(1 - Ts.died, 25, 'omitnan'), '-', 'Color', S.sac, 'LineWidth', 1.1);
-h(2) = plot(ax, xe, Es.survival, '-o', 'Color', S.green, 'LineWidth', 1.3, 'MarkerSize', 4, 'MarkerFaceColor', S.green);
+plot(ax, x, movmean(1 - Ts.died, 25, 'omitnan'), '-', 'Color', S.blue, 'LineWidth', 1.1);
+plot(ax, xe, Es.survival, '-o', 'Color', S.orange, 'LineWidth', 1.3, 'MarkerSize', 4, 'MarkerFaceColor', S.orange);
 ylim(ax, [0 1.02]); xlim(ax, [0 1]);
 xlabel(ax, 'Transitions [$\times 10^{6}$]'); ylabel(ax, 'Survival rate');
 title(ax, '(b) Survival', 'FontWeight', 'normal');
 formatAxis(ax, S);
-legend(ax, h, {'Training, moving mean', 'Evaluation'}, 'Location', 'southeast', 'Box', 'off', 'Interpreter', 'latex');
+lgd = legend(ax, h, {'Training episodes', 'Training, moving median / mean', 'Evaluation (last 2\,s)'}, ...
+    'Orientation', 'horizontal', 'Box', 'off', 'Interpreter', 'latex');
+lgd.Layout.Tile = 'north';
 saveFigure(f, figDir, 'fig01_sac_training', doSave);
 end
 
@@ -96,7 +95,7 @@ labels = {'PPO, initial', 'PPO, $\tanh$', 'PPO, $\tanh$ + $\sigma_{\min}$', 'SAC
 panels = {'final_distance_m', 'Position error [m]',          '(a) Training, end of episode',       'T'; ...
           'err_final_cm',     'Position error [cm]',          '(b) Evaluation, last 2\,s',          'E'; ...
           'sat_pct',          'Commands at $\pm 1$ [\%]',     '(c) Evaluation, saturated commands', 'E'; ...
-          'survival',         'Survival rate',                '(d) Evaluation, survival',           'E'};
+          'policy_std',       'Policy standard deviation',    '(d) Training, exploration noise',    'T'};
 sac = M(M.variant == "sac", :);
 f = newFigure(S, 16, 11.5);
 tl = tiledlayout(f, 2, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
@@ -133,7 +132,7 @@ for p = 1:4
         case 1, set(ax, 'YScale', 'log'); ylim(ax, [0.05 2]);
         case 2, set(ax, 'YScale', 'log'); ylim(ax, [3 150]);
         case 3, ylim(ax, [0 100]);
-        case 4, ylim(ax, [0 1.02]);
+        case 4, set(ax, 'YScale', 'log'); ylim(ax, [3e-3 1.5]);
     end
 end
 lgd = legend(h, labels, 'Orientation', 'horizontal', 'Box', 'off', 'Interpreter', 'latex');
@@ -194,7 +193,8 @@ end
 set(ax, 'YScale', 'log'); ylim(ax, [0.01 1]); xlim(ax, [0 5]);
 xlabel(ax, 'Time [s]'); ylabel(ax, '$\|\mathbf{p}-\mathbf{p}_r\|$ [m]');
 formatAxis(ax, S);
-legend(ax, h, labs, 'Location', 'northeast', 'NumColumns', 2, 'Box', 'off', 'Interpreter', 'latex');
+lgd = legend(ax, h, labs, 'Orientation', 'horizontal', 'Box', 'off', 'Interpreter', 'latex');
+lgd.Layout.Tile = 'north';
 saveFigure(f, figDir, 'fig04_example_episode', doSave);
 end
 
@@ -271,20 +271,20 @@ end
 Lb = L(keep & L.survival >= 0.5, :);
 levels = unique(Lb.peak_acc)';
 speed = arrayfun(@(a) mean(Lb.ref_speed_max(Lb.peak_acc == a), 'omitnan'), levels);
-isFM = ~cellfun(@isempty, regexp(cellstr(Lb.policy), '^FM_s\d\d$', 'once'));
+isFM = ~cellfun(@isempty, regexp(cellstr(Lb.policy), '^FM_s\d\d$', 'once'));       % k_T 3.9, hover at a0 = 0
+isFM19 = ~cellfun(@isempty, regexp(cellstr(Lb.policy), '^FMk19_s\d\d$', 'once'));  % same configuration, k_T 1.9
 
-pol = {'B0', 'SAC', 'PRETRAIN', 'A1', 'A2', 'O1'};
-col = {S.sac, S.grey, S.grey, S.blue, S.green, S.orange};
-sty = {'-', '--', ':', '-', '-', '-'};
-mrk = {'o', 'x', '+', 'o', 's', '^'};
-lab = {'PPO baseline', 'SAC', 'RAPTOR pre-training', 'PPO + $\mathbf{a}_r$', ...
-       'PPO + $\mathbf{a}_r$ + $\lVert\mathbf{v}-\mathbf{v}_r\rVert$', 'PPO + $\mathbf{a}_r$, geometric'};
+pol = {'B0', 'SAC', 'PRETRAIN', 'A1', 'A2'};
+col = {S.sac, S.grey, S.grey, S.blue, S.green};
+sty = {'-', '--', ':', '-', '-'};
+mrk = {'o', 'x', '+', 'o', 's'};
+lab = {'PPO baseline', 'SAC', 'RAPTOR pre-training', 'Baseline + $\mathbf{a}_d$', 'Velocity + $\mathbf{a}_d$'};
 panels = {'rmse_cm', 'Position RMSE [cm]', '(a) Tracking error'; ...
           'along_mean_cm', 'Mean error along the path [cm]', '(b) Lag'};
 
 f = newFigure(S, 16, 6.6);
 tl = tiledlayout(f, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
-hAll = gobjects(1, numel(pol) + 1);
+hAll = gobjects(1, numel(pol) + 2);
 for p = 1:2
     c = panels{p, 1};
     ax = nexttile(tl, p); hold(ax, 'on');
@@ -302,24 +302,28 @@ for p = 1:2
     ok = ~isnan(lo);
     fill(ax, [levels(ok), fliplr(levels(ok))], [lo(ok), fliplr(hi(ok))], S.sac, 'FaceAlpha', 0.18, ...
         'EdgeColor', 'none', 'HandleVisibility', 'off');
-    % thrust and moments: median and interquartile range over the seeds that were not lost (at least six)
-    fa = []; q = [];
-    for i = 1:numel(levels)
-        v = Lb.(c)(isFM & Lb.peak_acc == levels(i));
-        v = v(~isnan(v));
-        if numel(v) >= 6, fa(end + 1) = levels(i); q(end + 1, :) = quantiles(v(:)', [0.25 0.5 0.75]); end %#ok<AGROW>
-    end
-    if ~isempty(fa)
-        fill(ax, [fa, fliplr(fa)], [q(:, 1)', fliplr(q(:, 3)')], S.purple, 'FaceAlpha', 0.18, 'EdgeColor', 'none', ...
-            'HandleVisibility', 'off');
-        hAll(1) = plot(ax, fa, q(:, 2)', '-d', 'Color', S.purple, 'LineWidth', 1.2, 'MarkerSize', 3.5, ...
-            'MarkerFaceColor', S.purple);
+    % thrust and moments (k_T 1.9 with its interquartile range, and 3.9): median over the seeds that were not lost (at least six)
+    sets = {isFM19, isFM}; lsty = {'-d', '--d'}; face = {S.purple, 'w'};
+    for j = 1:2
+        fa = []; q = [];
+        for i = 1:numel(levels)
+            v = Lb.(c)(sets{j} & Lb.peak_acc == levels(i));
+            v = v(~isnan(v));
+            if numel(v) >= 6, fa(end + 1) = levels(i); q(end + 1, :) = quantiles(v(:)', [0.25 0.5 0.75]); end %#ok<AGROW>
+        end
+        if isempty(fa), continue; end
+        if j == 1
+            fill(ax, [fa, fliplr(fa)], [q(:, 1)', fliplr(q(:, 3)')], S.purple, 'FaceAlpha', 0.18, 'EdgeColor', 'none', ...
+                'HandleVisibility', 'off');
+        end
+        hAll(j) = plot(ax, fa, q(:, 2)', lsty{j}, 'Color', S.purple, 'LineWidth', 1.2, 'MarkerSize', 3.5, ...
+            'MarkerFaceColor', face{j});
     end
     for k = 1:numel(pol)
         m = Lb.policy == pol{k};
         [x, order] = sort(Lb.peak_acc(m));
         y = Lb.(c)(m); y = y(order);
-        hAll(k + 1) = plot(ax, x, y, [sty{k} mrk{k}], 'Color', col{k}, 'LineWidth', 1.2, 'MarkerSize', 3.8);
+        hAll(k + 2) = plot(ax, x, y, [sty{k} mrk{k}], 'Color', col{k}, 'LineWidth', 1.2, 'MarkerSize', 3.8);
     end
     xlim(ax, [0 max(levels) * 1.03]);
     xlabel(ax, 'Peak reference acceleration [m/s$^2$]'); ylabel(ax, panels{p, 2});
@@ -333,9 +337,9 @@ for p = 1:2
     ax2 = addSpeedAxis(tl, ax, levels, speed);
     if isempty(ax2), title(ax, panels{p, 3}, 'FontWeight', 'normal'); else, title(ax2, panels{p, 3}, 'FontWeight', 'normal'); end
 end
-names = [{'Thrust and moments'}, lab];
+names = [{'Thrust and moments, $k_T = 1.9$', 'Thrust and moments, $k_T = 3.9$'}, lab];
 lgd = legend(ax, hAll(isgraphics(hAll)), names(isgraphics(hAll)), 'Orientation', 'horizontal', 'Box', 'off', 'Interpreter', 'latex', ...
-    'NumColumns', 3, 'FontSize', 7.5);
+    'NumColumns', 4, 'FontSize', 7.5);
 lgd.Layout.Tile = 'north';
 saveFigure(f, figDir, 'fig06_lemniscate', doSave);
 end
@@ -366,8 +370,8 @@ function fig7LemniscatePaths(S, P, figDir, doSave)
 levels = unique(P.peak_acc)';
 pol = {'FM_s03', 'B0', 'PRETRAIN', 'A1'};
 col = {S.purple, S.sac, S.grey, S.blue};
-lab = {'Thrust and moments', 'PPO baseline', 'RAPTOR pre-training', 'PPO + $\mathbf{a}_r$'};
-f = newFigure(S, 16, 6.4);
+lab = {'Thrust and moments, $k_T = 1.9$', 'PPO baseline', 'RAPTOR pre-training', 'Baseline + $\mathbf{a}_d$'};
+f = newFigure(S, 17.5, 6.4);                          % wider than the others: the legend stays on one line
 tl = tiledlayout(f, 1, numel(levels), 'TileSpacing', 'compact', 'Padding', 'compact');
 h = gobjects(1, 5);
 for i = 1:numel(levels)
@@ -391,6 +395,7 @@ end
 valid = isgraphics(h);
 names = [{'Reference'}, lab];
 lgd = legend(ax, h(valid), names(valid), 'Orientation', 'horizontal', 'Box', 'off', 'Interpreter', 'latex', 'FontSize', 7.5);
+lgd.ItemTokenSize = [16 18];                          % shorter line samples (default 30 pt): one line within the width
 lgd.Layout.Tile = 'north';
 saveFigure(f, figDir, 'fig07_lemniscate_paths', doSave);
 end
@@ -432,8 +437,9 @@ end
 end
 
 function f = newFigure(S, widthCm, heightCm)
-f = figure('Units', 'centimeters', 'Color', 'w', 'WindowStyle', 'normal');
+f = figure('Units', 'centimeters', 'Color', 'w', 'WindowStyle', 'normal', 'Resize', 'off');
 f.Position = [2 2 widthCm heightCm];
+f.UserData.sizeCm = [widthCm heightCm];               % restored before saving (the window manager may resize it)
 set(f, 'DefaultAxesFontSize', S.font);
 end
 
@@ -467,9 +473,9 @@ function saveFigure(f, figDir, name, doSave)
 if ~doSave, return; end
 drawnow;
 if ~isvalid(f), warning('Figure %s was closed before it could be saved.', name); return; end
+sz = f.UserData.sizeCm;
+set(f, 'Units', 'centimeters', 'Position', [2 2 sz]); drawnow;
 exportgraphics(f, fullfile(figDir, [name '.png']), 'Resolution', 300);
-set(f, 'PaperUnits', 'centimeters');
-pos = get(f, 'Position');
-set(f, 'PaperSize', pos(3:4), 'PaperPosition', [0 0 pos(3:4)]);
+set(f, 'PaperUnits', 'centimeters', 'PaperSize', sz, 'PaperPosition', [0 0 sz]);
 print(f, fullfile(figDir, [name '.pdf']), '-dpdf', '-painters');
 end

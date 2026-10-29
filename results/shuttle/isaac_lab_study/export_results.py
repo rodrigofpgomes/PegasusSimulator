@@ -18,7 +18,8 @@ LOGS = HERE.parents[2] / "examples/rl/tasks/shuttle/thrust_moment/isaac_lab/logs
 STUDIES = {1.9: LOGS / "study_10seeds", 3.9: LOGS / "study_10seeds_kt3p9"}
 OUT = HERE / "data"
 BINS = 100
-EXAMPLE_RUNS = ("ms012_den08", "ms012_den08_yaw011", "ms012_den08_yaw101")   # all seeds exported
+EXAMPLE_RUNS = ("ms012_den08", "ms025_den08", "ms012_den08_yaw011", "ms012_den08_yaw101", "ms012_den08_hc",
+                "ms025_den08_yaw011", "ms025_den08_yaw101", "ms025_den08_yaw101_hc")   # all seeds exported
 TRAIN_TAGS = {"final_distance_m": "Metrics_final_distance_to_goal", "died": "Episode_Termination_died"}
 
 
@@ -73,7 +74,8 @@ def main():
                             np.mean([reasons.get(e) != "terminated" for e in range(n_env)]),
                             np.mean(fin), np.mean(rmse), np.nanmedian(t20),
                             per_goal_rms(0), per_goal_rms(1), per_goal_rms(2),
-                            wz_mean.mean(), np.mean(tilt), np.mean(vmax), np.nanmean(act[t > 8.0, 0])])
+                            wz_mean.mean(), np.mean(tilt), np.mean(vmax), np.nanmean(act[t > 8.0, 0]),
+                            int(env_cfg.get("thrust_hover_centered", False))])
 
             if kt != 1.9:
                 continue                                    # curves and episodes only for the main study
@@ -96,6 +98,8 @@ def main():
                 example_env = int(np.argmin(np.abs(d0 - np.median(d0))))
         # example episodes (same goal for every policy), both thrust-to-weight ratios for the thrust input
         for exp in EXAMPLE_RUNS:
+            if not (root / exp).is_dir():
+                continue
             for eval_dir in sorted((root / exp / "eval").glob("*_s??")):
                 cM, cD, w_psi, env_cfg = run_config(eval_dir)
                 z = np.load(eval_dir / "steps.npz")
@@ -105,14 +109,20 @@ def main():
                 vel, w = z["vel"][sel][o], z["w_b"][sel][o]
                 a = np.clip(z["action"][sel][o], -1.0, 1.0)
                 weight = env_cfg["drone_mass"] * env_cfg["gravity"]
-                thrust = env_cfg["thrust_to_weight"] * weight * (a[:, 0] + 1.0) / 2.0
+                centered = env_cfg.get("thrust_hover_centered", False)
+                if centered:                                # same mapping as QuadcopterEnv._apply_action
+                    thrust = weight * (1.0 + np.where(a[:, 0] < 0.0, a[:, 0], (env_cfg["thrust_to_weight"] - 1.0) * a[:, 0]))
+                    a0_hover = 0.0
+                else:
+                    thrust = env_cfg["thrust_to_weight"] * weight * (a[:, 0] + 1.0) / 2.0
+                    a0_hover = 2.0 / env_cfg["thrust_to_weight"] - 1.0
                 tau = env_cfg["moment_scale"] * a[:, 1:]
                 spawn = pos[0, :2]
                 for i in range(len(t)):
                     episodes.append([kt, exp, eval_dir.name, cM, cD, w_psi, int(eval_dir.name[-2:]), t[i],
                                      *(pos[i, :2] - spawn), pos[i, 2], *(goal[i, :2] - spawn), goal[i, 2],
                                      *vel[i], *w[i], np.linalg.norm(goal[i] - pos[i]),
-                                     a[i, 0], thrust[i], *tau[i], weight, 2.0 / env_cfg["thrust_to_weight"] - 1.0])
+                                     a[i, 0], thrust[i], *tau[i], weight, a0_hover])
 
     head = ["thrust_to_weight", "experiment", "run", "moment_scale", "denominator", "w_psi", "seed"]
 
@@ -123,7 +133,7 @@ def main():
             writer.writerows(rows)
 
     write("run_metrics.csv", ["survival", "final_err_m", "rmse_m", "t20_s", "w_x_rms", "w_y_rms", "w_z_rms",
-                              "wz_mean_signed", "tilt_max_deg", "speed_max", "a0_hover"], metrics)
+                              "wz_mean_signed", "tilt_max_deg", "speed_max", "a0_hover", "hover_centered"], metrics)
     write("eval_curves.csv", ["t", "err_mean", "wz_abs_mean"], curves)
     write("training_curves.csv", ["iteration", "final_distance_m", "died"], training)
     write("example_episode.csv", ["t", "x", "y", "z", "goal_x", "goal_y", "goal_z", "vx", "vy", "vz",

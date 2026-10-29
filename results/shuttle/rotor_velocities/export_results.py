@@ -19,8 +19,9 @@ Every evaluation: play.py, 500 episodes, training initial states and references,
 
   ablation/raptor_tracking/logs/eval_lemniscate[_v5]/<policy>/a<peak acceleration>   lemniscate tracking
                                        (eval_direct_rotor_lemniscate.sh; _v5: speed bound relaxed from 2 to 5 m/s)
-  ablation/raptor_tracking/logs/eval_lemniscate_fm/FM_sNN/a<peak acceleration>   the same figure eight for the ten seeds
-                                       of the thrust/moment policy c_M 0.12, d_0 0.8, w_psi 1.01 (eval_force_moment_lemniscate.sh)
+  ablation/raptor_tracking/logs/<FM_LEMNISCATE>/FM_sNN/a<peak acceleration>   the same figure eight for the ten seeds
+                                       of the thrust/moment policy (eval_force_moment_lemniscate.sh): c_M 0.25, d_0 0.8,
+                                       w_psi 1.01, k_T 3.9 with the hover at a0 = 0 (FM_sNN) and k_T 1.9 (FMk19_sNN)
 
 Writes data/training_curves.csv, eval_checkpoints.csv, run_metrics.csv, survival_by_tilt.csv, ablation_metrics.csv,
 example_episode.csv.
@@ -28,6 +29,7 @@ example_episode.csv.
 """
 import csv
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -169,11 +171,14 @@ def ablation_rows():
     return rows
 
 
+FM_LEMNISCATE = "eval_lemniscate_fm_ms025_den08_yaw101_hc_kt3p9"   # policies FM_sNN (k_T 3.9, hover at a0 = 0)
+FM_LEMNISCATE_KT19 = "eval_lemniscate_fm_ms025_den08_yaw101"       # same configuration with k_T 1.9, exported as FMk19_sNN
 # (folder, per-axis speed bound of the task [m/s]; 0 = the task has no speed bound)
-LEM_ROOTS = ((ABLATION_LOGS / "eval_lemniscate", 2.0), (ABLATION_LOGS / "eval_lemniscate_v5", 5.0),
-             (ABLATION_LOGS / "eval_lemniscate_fm", 0.0))
+LEM_ROOTS = ((ABLATION_LOGS / "eval_lemniscate", 2.0, ""), (ABLATION_LOGS / "eval_lemniscate_v5", 5.0, ""),
+             (ABLATION_LOGS / FM_LEMNISCATE, 0.0, ""))
 PATH_POLICIES = ("B0", "A1", "PRETRAIN")
 PATH_OPTIONAL = ("FM_s03",)       # drawn where it was not lost
+PATH_FM_ROOT = ABLATION_LOGS / FM_LEMNISCATE_KT19   # thrust/moment path: k_T 1.9, the reference of its section
 PATH_LEVELS = (2.0, 5.0)
 
 
@@ -202,10 +207,11 @@ def lag_metrics(eval_dir, t_skip=5.0, min_speed=0.2):
 def lemniscate_rows():
     """Tracking metrics of every finished lemniscate evaluation (both speed bounds)."""
     rows = []
-    for root, bound in LEM_ROOTS:
+    for root, bound, prefix in LEM_ROOTS + ((ABLATION_LOGS / FM_LEMNISCATE_KT19, 0.0, "FMk19_"),):
         for d in sorted(root.glob("*/a*")):
-            if (d / ".done").exists():
-                rows.append({"policy": d.parent.name, "peak_acc": float(d.name[1:]), "speed_bound": bound,
+            if (d / ".done").exists() and (not prefix or re.fullmatch(r"FM_s\d\d", d.parent.name)):
+                name = prefix + d.parent.name[3:] if prefix else d.parent.name
+                rows.append({"policy": name, "peak_acc": float(d.name[1:]), "speed_bound": bound,
                              **tracking_metrics(d), **lag_metrics(d)})
     return sorted(rows, key=lambda r: (r["policy"], r["peak_acc"], r["speed_bound"]))
 
@@ -218,7 +224,7 @@ def lemniscate_paths():
     rows = []
     for level in PATH_LEVELS:
         dirs = {}
-        for root, _ in reversed(LEM_ROOTS):               # the relaxed-bound run wins when both exist
+        for root in (PATH_FM_ROOT,) + tuple(r for r, _, _ in reversed(LEM_ROOTS)):   # relaxed bound wins
             for pol in PATH_POLICIES + PATH_OPTIONAL:
                 d = root / pol / f"a{level:g}"
                 if pol not in dirs and (d / ".done").exists():

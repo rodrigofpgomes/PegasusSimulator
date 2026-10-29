@@ -66,7 +66,7 @@ saveFigure(f, figDir, 'fig01_training_terminations', saveFigures);
 f = newFigure(S, 15, 7.2);
 tl = tiledlayout(f, 1, 2, 'TileSpacing', 'compact', 'Padding', 'compact');
 fields = {'J_quad', 'rmse_m'};
-ylabs  = {'Return $J$ of $r^{\mathrm{Q}}$', 'Position RMSE [m]'};
+ylabs  = {'Return $G$ of $r^{\mathrm{Q}}$', 'Position RMSE [m]'};
 ttls   = {'(a) Return', '(b) RMSE'};
 refs   = [lqrJ, lqrRmse];
 for k = 1:2

@@ -22,13 +22,16 @@ data/steady_alpha_power.csv: per variant, in level cruise at 1, 2, ..., 14 m/s (
 vehicles, t >= 3 s, logs .../<variant>/all/<regime>): median angle of attack, power, lift-rotor thrust and Fz.
 data/trim_curve.csv: minimum-power trim in level flight (angle of attack of the task's trim table, shaft power of the
 trim table, linearly interpolated).
-data/regime_metrics.csv: per variant and regime, over the 200 perturbed vehicles and t >= 3 s: position RMSE (median
-and 90th percentile over vehicles), heading error, power, |beta|, alpha, mean |delta|, and the control moment of the
-surfaces cancelled by the lift rotors (min(|M_surf|, |M_rot|) where the signs are opposite) per axis.
-data/mission_v12.csv (wls_ema_m02, retained policy) and data/mission_v12_base.csv (base, appendix): mission at 12 m/s (R = 50 m; hover at 10 m, cruise climb to 20 m and descent back, play_multi
---traj_z 10 --spawn-altitude 10 --mission_climb 10) of the policy with the true state, with the
-PX4 EKF2 estimate and with the estimate and a GPS without random walk, at 20 Hz: t, phase, V, V_ref; for each case
-(true, px4, px4_nodrift) the true position x_, y_, z_, the error e_true_ [m] of the true position and, for the PX4
+data/regime_metrics.csv: per variant and regime (deceleration, helix and the regimes in <variant>/all/), over the 200
+perturbed vehicles and t >= 3 s: position RMSE (median and 90th percentile over vehicles), heading error, power, |beta|,
+alpha, mean |delta|, and the control moment of the surfaces cancelled by the lift rotors (min(|M_surf|, |M_rot|) where
+the signs are opposite) per axis.
+data/mission_v12.csv (wls_ema_m02, retained policy): mission at 12 m/s (R = 50 m; hover at 10 m, cruise climb to 20 m
+and descent back, play_multi --traj_z 10 --spawn-altitude 10 --mission_climb 10) of the policy with the true state and
+with the PX4 EKF2 estimate (PX4 armed; examples/rl/scripts/shuttle_glider/run_px4_mission.sh) from gazebo-classic
+sensors (px4, GPS height reference) and from a standard GNSS without RTK (px4_gnss, barometric height reference), at
+20 Hz. data/mission_v12_base.csv (base, appendix): the earlier PX4 flights (Pegasus default sensors, PX4 disarmed), cases px4 and px4_nodrift (GPS without random walk). Columns: t, phase, V, V_ref; for each case
+(true and the PX4 cases) the true position x_, y_, z_, the error e_true_ [m] of the true position and, for the PX4
 cases, the estimated position xe_, ye_, ze_, the estimated speed Ve_ [m/s] and the error e_est_ [m] of the estimate with
 respect to the reference (the error the policy observes); reference x_ref, y_ref, z_ref. data/mission_v12_phases.csv: phase, t_start, t_end.
 
@@ -163,14 +166,17 @@ def metrics(variant, regime, X):
 
 
 VARIANT_LOGS = REPO / "examples/rl/tasks/shuttle_glider/tracking/logs/variants"
-MISSION_CASES = (("true", "mission"), ("px4", "mission_px4"), ("px4_nodrift", "mission_px4_gps_nodrift"))
+MISSION_CASES = (("true", "mission"),
+                 ("px4", "mission_px4_height_ref/gpsref_inair_gazebo"),
+                 ("px4_gnss", "mission_px4_height_ref/baroref_inair_gnss"))
+MISSION_CASES_OLD = (("true", "mission"), ("px4", "mission_px4"), ("px4_nodrift", "mission_px4_gps_nodrift"))
 
 
-def export_mission(variant="wls_ema_m02", suffix="", flight="mission_v12alt_s03", every=5):
+def export_mission(variant="wls_ema_m02", suffix="", flight="mission_v12alt_s03", every=5, cases=MISSION_CASES):
     """Mission of one policy: true state vs PX4 estimate (play_multi records, px4_estimate.jsonl)."""
     MISSION = VARIANT_LOGS / variant
     cols = {}
-    for case, sub in MISSION_CASES:
+    for case, sub in cases:
         d = MISSION / sub / flight
         with open(d / "trajectories.csv") as f:
             rows = list(csv.DictReader(f))
@@ -183,6 +189,10 @@ def export_mission(variant="wls_ema_m02", suffix="", flight="mission_v12alt_s03"
                 cols[f"{k}_ref"] = A(f"goal_{k}")
             phases = json.load(open(d / "mission_phases.json"))
         pos, ref = np.stack([A(k) for k in "xyz"], 1), np.stack([A(f"goal_{k}") for k in "xyz"], 1)
+        if case == "true":
+            ref_true = ref
+        elif ref.shape != ref_true.shape or np.abs(ref - ref_true).max() > 1e-4:
+            raise ValueError(f"{d}: reference differs from the true-state flight")
         for i, k in enumerate("xyz"):
             cols[f"{k}_{case}"] = pos[:, i]
         cols[f"e_true_{case}"] = np.linalg.norm(pos - ref, axis=1)
@@ -252,10 +262,10 @@ def export_steady(veh):
 
 def main():
     veh = sgt.load_vehicle()
-    export_steady(veh)
     DATA.mkdir(exist_ok=True)
+    export_steady(veh)
     export_mission("wls_ema_m02")            # retained policy (main text)
-    export_mission("base", "_base")          # appendix
+    export_mission("base", "_base", cases=MISSION_CASES_OLD)   # appendix (earlier PX4 flights only)
     rows = []
     for regime in REGIMES:
         columns, episode = None, []
@@ -269,6 +279,12 @@ def main():
             w.writerow(["variant"] + columns)
             w.writerows(episode)
         print(f"data/episode_{regime}.csv")
+    # The other regimes of the regime table (examples/rl/scripts/shuttle_glider/eval_tracking.sh with OUT_ROOT: <variant>/all/<regime>)
+    for regime in sorted(p.name for p in (LOGS / VARIANTS[0] / "all").iterdir() if (p / "steps.npz").exists()):
+        if regime in REGIMES:
+            continue
+        for v in VARIANTS:
+            rows.append(metrics(v, regime, derived(load(LOGS / v / "all" / regime / "steps.npz"), veh)))
     with open(DATA / "regime_metrics.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=list(rows[0]))
         w.writeheader()

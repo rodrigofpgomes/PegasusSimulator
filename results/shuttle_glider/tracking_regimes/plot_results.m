@@ -1,7 +1,8 @@
 %% Shuttle-Glider tracking - flight regimes and the mission with the PX4 estimator
 % Data: data/*.csv written by export_results.py.
 % All text uses the LaTeX interpreter, i.e. Computer Modern.
-% Variants: Base, convex filtered (wls_ema) and convex filtered + lateral moments (wls_ema_m02, retained), seed 3.
+% Variants: B base, F filtered differential (wls_ema) and M filtered differential + lateral
+% moments (wls_ema_m02, retained), seed 3.
 %
 %   plot_results                 % all figures, saved to figures/ (PDF + PNG)
 %   plot_results(false)          % draw only
@@ -17,11 +18,12 @@
 %   fig01_legend            variants and reference, placed above the subfigures (the panels have no legend)
 %   fig01h, fig02h          beside the surfaces: shaft power and wing lift (deceleration), 3D path (helix)
 %   fig03_mission_px4       one figure at the text width (16 x 10.5 cm): mission at 12 m/s of the retained policy (M) with
-%                           the true state, with the PX4 EKF2 estimate, and with the estimate and a GPS without random
-%                           walk: speed (true-state flight) and estimated speed (PX4 flights), phases shaded, error of
-%                           the true position (log), error of the estimated
-%                           position (the error the policy observes); legend on top
-%   figA3_mission_px4_base  appendix: as fig03 for the base policy
+%                           the true state and with the PX4 EKF2 estimate (armed, gazebo-classic sensors) from the
+%                           gazebo-classic GPS and from a standard GNSS without RTK (barometric height): speed (true-state
+%                           flight) and estimated speed (PX4 flights), phases shaded, error of the true position (log),
+%                           error of the estimated position (the error the policy observes); legend on top
+%   figA3_mission_px4_base  appendix: as fig03 for the base policy (earlier PX4 flights: default sensors, GPS with and
+%                           without random walk)
 %   figA4_mission_path_base appendix: as figA2 for the base policy
 %   fig04_steady_alpha_power  text width (16 x 7 cm): angle of attack and power relative to the minimum-power trim
 %                           against speed in level cruise at 1 to 14 m/s, the three variants (trim dashed)
@@ -128,7 +130,7 @@ saveFigure(f, figDir, 'fig04_steady_alpha_power', saveFigures);
 
 %% fig03 (filtered + lateral moments, retained) and figA3 (base, appendix) - mission with the PX4 estimator
 missionFigure(S, dataDir, 'mission_v12', figDir, 'fig03_mission_px4', saveFigures);
-missionFigure(S, dataDir, 'mission_v12_base', figDir, 'figA3_mission_px4_base', saveFigures);
+missionFigure(baseCases(S), dataDir, 'mission_v12_base', figDir, 'figA3_mission_px4_base', saveFigures);
 
 %% figA1 - 3D path of the helix (appendix): reference (black dotted) and the three variants
 EP = readtable(fullfile(dataDir, 'episode_helix_v12_r30_z1.csv'), 'TextType', 'string');
@@ -153,7 +155,7 @@ saveFigure(f, figDir, 'figA1_helix_path', saveFigures);
 
 %% figA2 (filtered + lateral moments, retained) and figA4 (base) - 3D path of the mission (appendix)
 missionPath(S, dataDir, 'mission_v12', figDir, 'figA2_mission_path', saveFigures);
-missionPath(S, dataDir, 'mission_v12_base', figDir, 'figA4_mission_path_base', saveFigures);
+missionPath(baseCases(S), dataDir, 'mission_v12_base', figDir, 'figA4_mission_path_base', saveFigures);
 end
 
 %% =============================================================== helpers
@@ -167,7 +169,7 @@ S.textW = 16;                                         % [cm] text width (full-wi
 S.panelW = 15; S.panelH = 8.5;                        % [cm] one panel; 4 rows of 0.49\linewidth fit on a page
 S.panelLegend = false;                                % legend of the variants in a separate file (fig01_legend)
 S.variants = ["base", "wls_ema", "wls_ema_m02"];
-S.labels = {'Base', 'Convex, filtered', 'Convex, filtered + moments'};
+S.labels = {'B: base', 'F: filtered differential', 'M: F + lateral moments'};
 S.color = [0.165 0.471 0.839;    % base          (#2a78d6, categorical slot 1)
            0.922 0.408 0.204;    % wls_ema       (#eb6834, slot 2)
            0.106 0.686 0.478];   % wls_ema_m02   (#1baf7a, slot 3)
@@ -176,8 +178,8 @@ S.marker = {'o', 's', '^'};                           % per variant (steady-flig
 % Multi-hue sequential colour map for the reference speed (dark blue at rest -> yellow at cruise speed)
 S.speedMap = parula(256);
 S.speedRange = [0 12];                                % [m/s] colour scale of the reference speed (mission)
-S.cases = ["true", "px4", "px4_nodrift"];
-S.caseLabels = {'True state', 'PX4 estimate', 'PX4 estimate, GPS without drift'};
+S.cases = ["true", "px4", "px4_gnss"];
+S.caseLabels = {'True state', 'PX4, gazebo-classic GPS', 'PX4, GNSS (barometric height)'};
 S.caseColor = [0.25 0.25 0.25;   % true state (neutral)
                0.922 0.408 0.204;
                0.165 0.471 0.839];
@@ -185,18 +187,19 @@ end
 
 function missionPath(S, dataDir, name, figDir, file, doSave)
 % Path of a mission in two views at the text width: (a) horizontal plane and (b) altitude against time, the
-% reference coloured by its speed in both. The true position of the two PX4 flights in dark grey (solid: PX4, dashed: GPS without
-% drift); the flight with the true state and the estimated positions lie on the reference within centimetres.
+% reference coloured by its speed in both. The true position of the two PX4 flights of S.cases in dark grey (solid: first,
+% dashed: second); the flight with the true state and the estimated positions lie on the reference within centimetres.
 % Two 2D views instead of one 3D view: the path spans about 520 x 100 m but only 10 m in height.
 M = readtable(fullfile(dataDir, [name '.csv']), 'TextType', 'string');
 P = readtable(fullfile(dataDir, [name '_phases.csv']), 'TextType', 'string');
 ink = [0.25 0.25 0.25];
-f = newFigure(S, S.textW, 9);
+f = newFigure(S, 18, 9);                            % wider than the text: the legend fits on one line
 tl = tiledlayout(f, 2, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
 
 ax = nexttile(tl); hold(ax, 'on');
-h2 = plot(ax, M.x_px4, M.y_px4, '-', 'Color', ink, 'LineWidth', 0.9);
-h3 = plot(ax, M.x_px4_nodrift, M.y_px4_nodrift, '--', 'Color', ink, 'LineWidth', 0.9);
+c2 = char(S.cases(2)); c3 = char(S.cases(3));
+h2 = plot(ax, M.(['x_' c2]), M.(['y_' c2]), '-', 'Color', ink, 'LineWidth', 0.9);
+h3 = plot(ax, M.(['x_' c3]), M.(['y_' c3]), '--', 'Color', ink, 'LineWidth', 0.9);
 hr = surface(ax, [M.x_ref M.x_ref], [M.y_ref M.y_ref], zeros(height(M), 2), [M.V_ref M.V_ref], ...
              'FaceColor', 'none', 'EdgeColor', 'interp', 'LineWidth', 3.0);
 uistack(hr, 'bottom');                                % the flown paths stay visible on top of the thick reference
@@ -213,27 +216,33 @@ ax = nexttile(tl); hold(ax, 'on');
 hz = surface(ax, [M.t M.t], [M.z_ref M.z_ref], zeros(height(M), 2), [M.V_ref M.V_ref], ...
              'FaceColor', 'none', 'EdgeColor', 'interp', 'LineWidth', 3.0);
 colormap(ax, S.speedMap); clim(ax, S.speedRange);
-plot(ax, M.t, M.z_px4, '-', 'Color', ink, 'LineWidth', 0.9);
-plot(ax, M.t, M.z_px4_nodrift, '--', 'Color', ink, 'LineWidth', 0.9);
-yl = [floor(min([M.z_ref; M.z_px4; M.z_px4_nodrift])) - 1, ceil(max([M.z_ref; M.z_px4; M.z_px4_nodrift])) + 1];
+plot(ax, M.t, M.(['z_' c2]), '-', 'Color', ink, 'LineWidth', 0.9);
+plot(ax, M.t, M.(['z_' c3]), '--', 'Color', ink, 'LineWidth', 0.9);
+zs = [M.z_ref; M.(['z_' c2]); M.(['z_' c3])];
+yl = [floor(min(zs)) - 1, ceil(max(zs)) + 1];
 ylim(ax, yl);
 phaseBands(ax, P, yl, false);
 timeAxis(ax, S, '$z$ [m]', true, [0 M.t(end)]);
 uistack(hz, 'bottom'); uistack(findobj(ax, 'Type', 'patch'), 'bottom');   % bands, reference, flights
 
-lgd = legend([hr, h2, h3], {'Reference (colour: speed)', 'PX4: true position', ...
-       'PX4, GPS without drift: true position'}, 'Orientation', 'horizontal', 'Box', 'off', 'Interpreter', 'latex');
+lgd = legend([hr, h2, h3], {'Reference (colour: speed)', S.caseLabels{2}, S.caseLabels{3}}, 'Orientation', 'horizontal', 'Box', 'off', 'Interpreter', 'latex');
 lgd.Layout.Tile = 'north';
 saveFigure(f, figDir, file, doSave);
 end
 
+function S = baseCases(S)
+% The base policy was flown only in the earlier PX4 flights (default sensors, GPS with and without random walk).
+S.cases = ["true", "px4", "px4_nodrift"];
+S.caseLabels = {'True state', 'PX4 estimate', 'PX4 estimate, GPS without drift'};
+end
+
 function missionFigure(S, dataDir, name, figDir, file, doSave)
-% Mission with the true state, the PX4 estimate and the estimate with a GPS without random walk: speed (phases
+% Mission with the true state and the two PX4 flights of S.cases: speed (phases
 % shaded), error of the true position (log), error of the estimated position; legend on top.
 M = readtable(fullfile(dataDir, [name '.csv']), 'TextType', 'string');
 P = readtable(fullfile(dataDir, [name '_phases.csv']), 'TextType', 'string');
 tEnd = M.t(end);
-f = newFigure(S, S.textW, 10.5);                    % wide and short: three stacked axes at the text width
+f = newFigure(S, 18, 10.5);                         % wide and short; wider than the text so that the legend fits
 tl = tiledlayout(f, 3, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
 
 ax = nexttile(tl); hold(ax, 'on');

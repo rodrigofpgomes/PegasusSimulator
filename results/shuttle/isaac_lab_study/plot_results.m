@@ -5,19 +5,20 @@
 %
 %   plot_results                % all figures, saved to figures/ (PDF + PNG)
 %   plot_results(false)         % draw only
-%   plot_results(true, 3, 1)    % seed of the best-policy episode (3), seed of the yaw-penalty episode (1)
+%   plot_results(true, 9, 4)    % seed of the reference episode (9), seed of the yaw-penalty episode (4)
 %
 % Figures, in the order of the text:
 %   fig01 training progress          fig02 mean error vs time         fig03 RMSE and t20 vs c_M
-%   fig04-07 best policy: position, velocity, angular rate, input
+%   fig04-07 reference moment scale (c_M 0.25, c_D 0.8): position, velocity, angular rate, input
 %   fig08 mean yaw rate of each policy                                fig09 angular rate vs yaw weight
-%   fig10 yaw-penalty episode        fig11 thrust action for k_T = 1.9 and 3.9
+%   fig10 yaw-penalty episode        fig11 thrust action for k_T = 1.9, 3.9 and 3.9 hover-centred
 % Requires MATLAB R2020b or later.
 
 function plot_results(saveFigures, bestSeed, yawSeed)
 if nargin < 1, saveFigures = true; end
-if nargin < 2, bestSeed = 3; end      % median final error among the ten seeds of c_M 0.12, c_D 0.8
-if nargin < 3, yawSeed = 1; end       % rotates without penalty, illustrates the effect of w_psi
+if nargin < 2, bestSeed = 9; end      % median final error among the ten seeds of c_M 0.25, c_D 0.8
+ktSeed = 5;                           % fig11: median final error among the ten seeds of c_M 0.25, c_D 0.8, w_psi 1.01
+if nargin < 3, yawSeed = 4; end       % c_M 0.25: rotates with w_psi 0.01, partly with 0.11, not with 1.01
 here = fileparts(mfilename('fullpath'));
 dataDir = fullfile(here, 'data');
 figDir  = fullfile(here, 'figures');
@@ -40,7 +41,7 @@ T  = readtable(fullfile(dataDir, 'training_curves.csv'), 'TextType', 'string');
 EP = readtable(fullfile(dataDir, 'example_episode.csv'), 'TextType', 'string');
 
 S = style();
-scales = [0.01 0.06 0.12];
+scales = [0.01 0.06 0.12 0.25 0.5 1.0];
 dens   = [0.8 1.5];
 G  = M(M.thrust_to_weight == 1.9 & M.w_psi < 0.02, :);       % moment-scale x denominator grid
 scaleNames = compose('$c_M = %.2f$ N\\,m', scales);
@@ -50,7 +51,7 @@ scaleNames = compose('$c_M = %.2f$ N\\,m', scales);
 h = gobjects(0);
 for d = 1:2
     ax = nexttile(tl); hold(ax, 'on');
-    for m = 1:3
+    for m = 1:numel(scales)
         sel = T.thrust_to_weight == 1.9 & T.w_psi < 0.02 & T.moment_scale == scales(m) & T.denominator == dens(d);
         [x, Y] = bySeed(T(sel, :), 'iteration', 'final_distance_m', (1:200)', 5);
         h(m) = medianBand(ax, x, Y, S.scaleColor(m, :));
@@ -60,7 +61,7 @@ for d = 1:2
     if d == 1, ylabel(ax, 'Final position error $\|\mathbf{e}_p\|$ [m]'); end
     formatAxis(ax, S);
 end
-bottomLegend(h, scaleNames);
+bottomLegend(h, scaleNames, 3);
 saveFigure(f, figDir, 'fig01_training_progress', saveFigures);
 
 %% fig02 - mean position error over the 200 goals versus time
@@ -68,7 +69,7 @@ saveFigure(f, figDir, 'fig01_training_progress', saveFigures);
 h = gobjects(0);
 for d = 1:2
     ax = nexttile(tl); hold(ax, 'on');
-    for m = 1:3
+    for m = 1:numel(scales)
         sel = C.w_psi < 0.02 & C.moment_scale == scales(m) & C.denominator == dens(d);
         [x, Y] = bySeed(C(sel, :), 't', 'err_mean', (0.05:0.1:9.95)', 1);
         h(m) = medianBand(ax, x, Y, S.scaleColor(m, :));
@@ -78,7 +79,7 @@ for d = 1:2
     if d == 1, ylabel(ax, 'Mean position error $\|\mathbf{e}_p\|$ [m]'); end
     formatAxis(ax, S);
 end
-bottomLegend(h, scaleNames);
+bottomLegend(h, scaleNames, 3);
 saveFigure(f, figDir, 'fig02_error_vs_time', saveFigures);
 
 %% fig03 - RMSE and convergence time versus moment scale (one marker per seed)
@@ -90,7 +91,7 @@ for k = 1:2
     ax = nexttile(tl); hold(ax, 'on');
     h = gobjects(0);
     for d = 1:2
-        for m = 1:3
+        for m = 1:numel(scales)
             v = G.(fields{k})(G.moment_scale == scales(m) & G.denominator == dens(d));
             hh = seedStrip(ax, m + S.denOffset(d), v, S.denColor(d, :), S.denMarker{d});
             if m == 1, h(d) = hh; end
@@ -102,8 +103,8 @@ end
 bottomLegend(h, {'$c_D = 0.8$ m', '$c_D = 1.5$ m'});
 saveFigure(f, figDir, 'fig03_rmse_t20_vs_moment_scale', saveFigures);
 
-%% fig04-fig07 - best policy (c_M 0.12, c_D 0.8): one goal at the median initial distance
-E = EP(EP.thrust_to_weight == 1.9 & EP.experiment == "ms012_den08" & EP.seed == bestSeed, :);
+%% fig04-fig07 - reference moment scale (c_M 0.25, c_D 0.8, w_psi 0.01): one goal at the median initial distance
+E = EP(EP.thrust_to_weight == 1.9 & EP.experiment == "ms025_den08" & EP.seed == bestSeed, :);
 E.zero = zeros(height(E), 1);
 E.hover = E.weight_N;
 cM = E.moment_scale(1);
@@ -121,13 +122,13 @@ episodeFigure(S, E, {'thrust_N', 'tau_x_Nm', 'tau_y_Nm', 'tau_z_Nm'}, {'hover', 
     {'Applied input', 'Hover thrust'}, ...
     {[0, 1.9 * E.weight_N(1)], [-cM, cM], [-cM, cM], [-cM, cM]}, figDir, 'fig07_best_input', saveFigures);
 
-%% fig08 - mean yaw rate of each of the 60 policies of the grid
+%% fig08 - mean yaw rate of each of the 120 policies of the grid
 f = newFigure(S, 8, 6.5);
 tl = tiledlayout(f, 1, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
 ax = nexttile(tl); hold(ax, 'on');
 h = gobjects(0);
 for d = 1:2
-    for m = 1:3
+    for m = 1:numel(scales)
         v = G.wz_mean_signed(G.moment_scale == scales(m) & G.denominator == dens(d));
         x = m + S.denOffset(d) + linspace(-0.07, 0.07, numel(v))';
         hh = scatter(ax, x, v, 22, S.denColor(d, :), S.denMarker{d}, 'filled');
@@ -138,12 +139,12 @@ yline(ax, 0, '-', 'Color', [0.3 0.3 0.3], 'HandleVisibility', 'off');
 yline(ax, 0.5, ':', 'Color', [0.3 0.3 0.3], 'HandleVisibility', 'off');
 yline(ax, -0.5, ':', 'Color', [0.3 0.3 0.3], 'HandleVisibility', 'off');
 formatCategoryAxis(ax, S, scales, 'Moment scale $c_M$ [N\,m]');
-ylabel(ax, 'Mean yaw rate of the policy [rad/s]');
+ylabel(ax, 'Mean yaw rate [rad/s]');
 bottomLegend(h, {'$c_D = 0.8$ m', '$c_D = 1.5$ m'});
 saveFigure(f, figDir, 'fig08_yaw_rate_per_policy', saveFigures);
 
-%% fig09 - angular rate RMSE per axis versus yaw-rate weight (c_M 0.12, c_D 0.8)
-Y9 = M(M.thrust_to_weight == 1.9 & M.moment_scale == 0.12 & M.denominator == 0.8, :);
+%% fig09 - angular rate RMSE per axis versus yaw-rate weight (c_M 0.25, c_D 0.8)
+Y9 = M(M.thrust_to_weight == 1.9 & M.moment_scale == 0.25 & M.denominator == 0.8, :);
 weights = unique(round(Y9.w_psi, 2))';
 f = newFigure(S, 8, 6.5);
 tl = tiledlayout(f, 1, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
@@ -164,7 +165,7 @@ bottomLegend(h, {'$\omega_x$', '$\omega_y$', '$\omega_z$'});
 saveFigure(f, figDir, 'fig09_angular_rate_vs_yaw_weight', saveFigures);
 
 %% fig10 - yaw-penalty episode: same goal and seed for the three weights
-exps = ["ms012_den08", "ms012_den08_yaw011", "ms012_den08_yaw101"];
+exps = ["ms025_den08", "ms025_den08_yaw011", "ms025_den08_yaw101"];
 rows = {'err', 'wx', 'wy', 'wz'};
 ylab = {'$\|\mathbf{e}_p\|$ [m]', '$\omega_x$ [rad/s]', '$\omega_y$ [rad/s]', '$\omega_z$ [rad/s]'};
 f = newFigure(S, 15, 13);
@@ -185,15 +186,16 @@ for r = 1:4
 end
 saveFigure(f, figDir, sprintf('fig10_yaw_penalty_episode_seed%d', yawSeed), saveFigures);
 
-%% fig11 - thrust action and thrust for k_T = 1.9 and 3.9 (same configuration, goal and seed)
+%% fig11 - thrust action and thrust for k_T = 1.9, 3.9 and 3.9 with the hover at a0 = 0 (same configuration, goal, seed)
 f = newFigure(S, 15, 8.5);
 tl = tiledlayout(f, 2, 1, 'TileSpacing', 'compact', 'Padding', 'compact');
-kts = [1.9 3.9];
+kts  = [1.9 3.9 3.9];
+exps = ["ms025_den08_yaw101" "ms025_den08_yaw101" "ms025_den08_yaw101_hc"];
 h = gobjects(0);
 for r = 1:2
     ax = nexttile(tl); hold(ax, 'on');
-    for i = 1:2
-        Ei = EP(EP.thrust_to_weight == kts(i) & EP.experiment == "ms012_den08" & EP.seed == bestSeed, :);
+    for i = 1:3
+        Ei = EP(EP.thrust_to_weight == kts(i) & EP.experiment == exps(i) & EP.seed == ktSeed, :);
         if r == 1
             h(i) = plot(ax, Ei.t, Ei.a0, '-', 'Color', S.ktColor(i, :), 'LineWidth', 1.3);
             yline(ax, Ei.a0_hover(1), '--', 'Color', S.ktColor(i, :), 'LineWidth', 1, 'HandleVisibility', 'off');
@@ -204,13 +206,13 @@ for r = 1:2
     xlim(ax, [0 10]); formatAxis(ax, S);
     if r == 1
         ylabel(ax, 'Thrust action $a_0$'); ylim(ax, [-1 1]); ax.XTickLabel = [];
-        h(3) = plot(ax, nan, nan, '--', 'Color', [0.3 0.3 0.3]);
+        h(4) = plot(ax, nan, nan, '--', 'Color', [0.3 0.3 0.3]);
     else
         ylabel(ax, '$T/(mg)$'); xlabel(ax, 'Time [s]');
         yline(ax, 1, ':', 'Color', [0.4 0.4 0.4], 'HandleVisibility', 'off');
     end
 end
-bottomLegend(h, {'$k_T = 1.9$', '$k_T = 3.9$', 'hover action $a_0 = 2/k_T - 1$'});
+bottomLegend(h, {'$k_T = 1.9$', '$k_T = 3.9$', '$k_T = 3.9$, hover at $a_0 = 0$', 'hover action'}, 2);
 saveFigure(f, figDir, 'fig11_thrust_action_kT', saveFigures);
 
 %% console summary (median over seeds)
@@ -234,7 +236,8 @@ end
 
 function S = style()
 S.font = 9;
-S.scaleColor  = [0.80 0.47 0.13; 0.25 0.55 0.30; 0.10 0.30 0.65];   % c_M 0.01, 0.06, 0.12
+S.scaleColor  = [0.80 0.47 0.13; 0.25 0.55 0.30; 0.10 0.30 0.65; ...  % c_M 0.01, 0.06, 0.12,
+                 0.49 0.18 0.56; 0.75 0.15 0.20; 0.25 0.25 0.25];   %     0.25, 0.5, 1.0
 S.denColor    = [0.10 0.30 0.65; 0.85 0.33 0.10];                   % c_D 0.8, 1.5
 S.denMarker   = {'o', 's'};
 S.denOffset   = [-0.17 0.17];
@@ -242,13 +245,14 @@ S.axisColor   = [0.00 0.45 0.74; 0.85 0.33 0.10; 0.47 0.67 0.19];   % x, y, z
 S.axisMarker  = {'s', 'd', 'o'};
 S.weightColor = [0.55 0.55 0.55; 0.85 0.55 0.10; 0.10 0.30 0.65];   % w_psi 0.01, 0.11, 1.01
 S.weightLine  = {'-', '--', '-'};
-S.ktColor     = [0.10 0.30 0.65; 0.85 0.33 0.10];                   % k_T 1.9, 3.9
+S.ktColor     = [0.10 0.30 0.65; 0.85 0.33 0.10; 0.25 0.55 0.30];   % k_T 1.9, 3.9, 3.9 hover-centred
 S.response    = [0.10 0.30 0.65];
 end
 
 function f = newFigure(S, widthCm, heightCm)
-f = figure('Units', 'centimeters', 'Color', 'w', 'WindowStyle', 'normal');
+f = figure('Units', 'centimeters', 'Color', 'w', 'WindowStyle', 'normal', 'Resize', 'off');
 f.Position = [2 2 widthCm heightCm];
+f.UserData.sizeCm = [widthCm heightCm];               % restored before saving (the window manager may resize it)
 set(f, 'DefaultAxesFontSize', S.font);
 end
 
@@ -272,8 +276,10 @@ function panelTitle(ax, d, den)
 title(ax, sprintf('(%s) $c_D = %.1f$ m', char('a' + d - 1), den), 'FontWeight', 'normal');
 end
 
-function bottomLegend(h, names)
-lgd = legend(h, names, 'Orientation', 'horizontal', 'Box', 'off', 'Interpreter', 'latex', 'FontSize', 9);
+function bottomLegend(h, names, nCols)
+if nargin < 3, nCols = numel(names); end
+lgd = legend(h, names, 'Orientation', 'horizontal', 'Box', 'off', 'Interpreter', 'latex', 'FontSize', 9, ...
+    'NumColumns', nCols);
 lgd.Layout.Tile = 'south';
 end
 
@@ -352,9 +358,9 @@ function saveFigure(f, figDir, name, doSave)
 if ~doSave, return; end
 drawnow;
 if ~isvalid(f), warning('Figure %s was closed before it could be saved.', name); return; end
+sz = f.UserData.sizeCm;
+set(f, 'Units', 'centimeters', 'Position', [2 2 sz]); drawnow;
 exportgraphics(f, fullfile(figDir, [name '.png']), 'Resolution', 300);
-set(f, 'PaperUnits', 'centimeters');
-pos = get(f, 'Position');
-set(f, 'PaperSize', pos(3:4), 'PaperPosition', [0 0 pos(3:4)]);
+set(f, 'PaperUnits', 'centimeters', 'PaperSize', sz, 'PaperPosition', [0 0 sz]);
 print(f, fullfile(figDir, [name '.pdf']), '-dpdf', '-painters');
 end
